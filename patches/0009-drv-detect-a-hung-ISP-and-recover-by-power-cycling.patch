@@ -1,0 +1,376 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weegee <748975+Weegee@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 11:14:26 +0200
+Subject: [PATCH 9/9] drv: detect a hung ISP and recover by power cycling
+
+The driver never noticed a hung firmware: commands timed out one by one,
+stream stop waited forever in vb2_wait_for_all_buffers(), and a stuck
+interrupt freed nothing but stayed stuck. The macOS camera stack answers a
+stalled camera with a full power cycle; do the same.
+
+- A command timeout marks the hardware failed, refuses further commands
+  and schedules the recovery work.
+- A frame watchdog fires when the firmware holds buffers but returns none
+  for 2 s; it is restarted on every buffer sent and every frame returned,
+  so an application that keeps its buffers does not trigger it.
+- Stream stop waits at most 2 s for the firmware to return its buffers.
+  Otherwise the chip is torn down and powered off before the buffers go
+  back to userspace, so it cannot write into them any more.
+- A stuck interrupt schedules the recovery.
+- A stream start that finds the firmware hung after idling restarts the
+  chip once instead of failing.
+
+debugfs gains "inject_hang" (halts the ISP CPU) and a hang counter.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ fthd_debugfs.c | 33 +++++++++++++++++++--
+ fthd_drv.c     | 38 ++++++++++++++++++++++--
+ fthd_drv.h     |  8 ++++++
+ fthd_ringbuf.c |  1 +
+ fthd_v4l2.c    | 78 +++++++++++++++++++++++++++++++++++++++-----------
+ fthd_v4l2.h    |  3 ++
+ 6 files changed, 141 insertions(+), 20 deletions(-)
+
+diff --git a/fthd_debugfs.c b/fthd_debugfs.c
+index 8fb9c4a..deb6318 100644
+--- a/fthd_debugfs.c
++++ b/fthd_debugfs.c
+@@ -186,9 +186,9 @@ static int seq_state_read(struct seq_file *seq, void *data)
+ 	seq_printf(seq, "hw_state: %s\nstreaming: %d\nsuspended: %d\nrecoveries: %u\n",
+ 		   fthd_hw_state_names[dev_priv->hw_state], dev_priv->streaming,
+ 		   dev_priv->suspended, dev_priv->recover_count);
+-	seq_printf(seq, "power_cycles: %u\nlast_off_ms: %lld\npowered_off: %d\n",
++	seq_printf(seq, "power_cycles: %u\nlast_off_ms: %lld\npowered_off: %d\nhangs: %u\n",
+ 		   dev_priv->power_cycles, dev_priv->last_off_ms,
+-		   dev_priv->powered_off);
++		   dev_priv->powered_off, dev_priv->hang_count);
+ 	mutex_unlock(&dev_priv->vb2_queue_lock);
+ 	return 0;
+ }
+@@ -199,11 +199,39 @@ static ssize_t fthd_store_recover(struct file *file, const char __user *user_buf
+ {
+ 	struct fthd_private *dev_priv = file->private_data;
+ 
++	mutex_lock(&dev_priv->vb2_queue_lock);
++	dev_priv->force_recover = true;
++	mutex_unlock(&dev_priv->vb2_queue_lock);
+ 	fthd_schedule_recovery(dev_priv);
+ 	flush_work(&dev_priv->recover_work);
+ 	return count;
+ }
+ 
++/* Writing anything halts the ISP CPU, as a firmware hang would (testing) */
++static ssize_t fthd_store_inject_hang(struct file *file, const char __user *user_buf,
++				      size_t count, loff_t *ppos)
++{
++	struct fthd_private *dev_priv = file->private_data;
++	int ret = count;
++
++	mutex_lock(&dev_priv->vb2_queue_lock);
++	if (dev_priv->hw_state == FTHD_HW_UP) {
++		dev_warn(&dev_priv->pdev->dev, "debugfs: halting the ISP CPU\n");
++		FTHD_ISP_REG_WRITE(0, ISP_REG_40004);
++	} else {
++		ret = -EIO;
++	}
++	mutex_unlock(&dev_priv->vb2_queue_lock);
++	return ret;
++}
++
++static const struct file_operations fops_inject_hang = {
++	.write = fthd_store_inject_hang,
++	.open = simple_open,
++	.owner = THIS_MODULE,
++	.llseek = default_llseek,
++};
++
+ static const struct file_operations fops_recover = {
+ 	.write = fthd_store_recover,
+ 	.open = simple_open,
+@@ -243,6 +271,7 @@ int fthd_debugfs_init(struct fthd_private *dev_priv)
+ 	debugfs_create_file("debug", S_IRUSR | S_IWUSR, d, dev_priv, &fops_debug);
+ 	debugfs_create_devm_seqfile(&dev_priv->pdev->dev, "state", d, seq_state_read);
+ 	debugfs_create_file("recover", S_IWUSR, d, dev_priv, &fops_recover);
++	debugfs_create_file("inject_hang", S_IWUSR, d, dev_priv, &fops_inject_hang);
+ 	dev_priv->debugfs = top;
+ 	return 0;
+ }
+diff --git a/fthd_drv.c b/fthd_drv.c
+index 935c799..a4a8f06 100644
+--- a/fthd_drv.c
++++ b/fthd_drv.c
+@@ -265,6 +265,7 @@ static void fthd_irq_work(struct work_struct *work)
+ 		/* Leave the interrupt gate closed; recovery reopens it */
+ 		dev_err(&dev_priv->pdev->dev, "irq stuck, disabling\n");
+ 		fthd_irq_disable(dev_priv);
++		fthd_hw_hung(dev_priv, "interrupt");
+ 		return;
+ 	}
+ 	pci_write_config_dword(dev_priv->pdev, 0x94, 0x200);
+@@ -433,6 +434,7 @@ static void fthd_hw_teardown(struct fthd_private *dev_priv)
+ 		fthd_stop_firmware(dev_priv);
+ 
+ 	dev_priv->hw_state = FTHD_HW_DOWN;
++	fthd_frame_watchdog_stop(dev_priv);
+ 	fthd_hw_quiesce(dev_priv);
+ 	/* Descriptors and IOMMU entries live in S2 memory */
+ 	fthd_v4l2_buffers_unmap(dev_priv);
+@@ -569,9 +571,10 @@ static void fthd_recover_work(struct work_struct *work)
+ 	if (dev_priv->suspended || dev_priv->removing)
+ 		goto out;
+ 
+-	/* A stream started after resume may have been faster */
+-	if (resuming && dev_priv->hw_state == FTHD_HW_UP)
++	/* A stream start may have restarted the chip already */
++	if (dev_priv->hw_state == FTHD_HW_UP && !dev_priv->force_recover)
+ 		goto out;
++	dev_priv->force_recover = false;
+ 
+ 	for (attempt = 1; attempt <= FTHD_RECOVER_ATTEMPTS; attempt++) {
+ 		if (!resuming || attempt > 1)
+@@ -604,6 +607,36 @@ void fthd_schedule_recovery(struct fthd_private *dev_priv)
+ 	schedule_work(&dev_priv->recover_work);
+ }
+ 
++/*
++ * The firmware stopped answering. Commands are refused from now on and the
++ * recovery work restarts the chip; the macOS driver also answers a stalled
++ * camera with a full power cycle. A failure during bring-up is handled by
++ * the bring-up itself.
++ */
++void fthd_hw_hung(struct fthd_private *dev_priv, const char *why)
++{
++	if (cmpxchg(&dev_priv->hw_state, FTHD_HW_UP, FTHD_HW_FAILED) != FTHD_HW_UP)
++		return;
++
++	dev_priv->hang_count++;
++	dev_err(&dev_priv->pdev->dev, "firmware not responding (%s)\n", why);
++	fthd_schedule_recovery(dev_priv);
++}
++
++/*
++ * Stop a chip that may still own buffers: without power it cannot write
++ * into memory that is handed back to userspace. Called with vb2_queue_lock
++ * held; the next stream start powers the chip up again.
++ */
++void fthd_hw_halt(struct fthd_private *dev_priv)
++{
++	if (dev_priv->hw_state == FTHD_HW_UP)
++		dev_priv->hw_state = FTHD_HW_FAILED;
++	fthd_hw_teardown(dev_priv);
++	if (!dev_priv->powered_off)
++		fthd_power_off(dev_priv);
++}
++
+ static void fthd_pci_remove(struct pci_dev *pdev)
+ {
+ 	struct fthd_private *dev_priv;
+@@ -724,6 +757,7 @@ static int fthd_pci_probe(struct pci_dev *pdev,
+ 	INIT_LIST_HEAD(&dev_priv->buffer_queue);
+ 	INIT_WORK(&dev_priv->irq_work, fthd_irq_work);
+ 	INIT_WORK(&dev_priv->recover_work, fthd_recover_work);
++	INIT_DELAYED_WORK(&dev_priv->frame_watchdog, fthd_frame_watchdog);
+ 
+ 	dev_priv->pdev = pdev;
+ 
+diff --git a/fthd_drv.h b/fthd_drv.h
+index 141b41d..70f6d22 100644
+--- a/fthd_drv.h
++++ b/fthd_drv.h
+@@ -12,6 +12,7 @@
+ 
+ #include <linux/pci.h>
+ #include <linux/ktime.h>
++#include <linux/workqueue.h>
+ #include <linux/spinlock.h>
+ #include <linux/wait.h>
+ #include <linux/mutex.h>
+@@ -32,6 +33,8 @@
+ 
+ /* Power cycles tried before the camera is declared dead until reopened */
+ #define FTHD_RECOVER_ATTEMPTS 3
++/* No frame for this long with buffers at the firmware means it hangs */
++#define FTHD_FRAME_TIMEOUT_MS 2000
+ 
+ enum fthd_hw_state {
+ 	FTHD_HW_DOWN,		/* firmware not running, channels released */
+@@ -149,6 +152,9 @@ struct fthd_private {
+ 	bool removing;
+ 	unsigned int recover_count;
+ 	struct work_struct recover_work;
++	struct delayed_work frame_watchdog;
++	unsigned int hang_count;
++	bool force_recover;
+ 
+ 	/* Camera power through ACPI CMPE */
+ 	struct pci_saved_state *pci_state;
+@@ -161,5 +167,7 @@ struct fthd_private {
+ 
+ extern int fthd_hw_restart(struct fthd_private *dev_priv, bool power_cycle);
+ extern void fthd_schedule_recovery(struct fthd_private *dev_priv);
++extern void fthd_hw_hung(struct fthd_private *dev_priv, const char *why);
++extern void fthd_hw_halt(struct fthd_private *dev_priv);
+ 
+ #endif
+diff --git a/fthd_ringbuf.c b/fthd_ringbuf.c
+index 9699800..8afd11f 100644
+--- a/fthd_ringbuf.c
++++ b/fthd_ringbuf.c
+@@ -135,6 +135,7 @@ int fthd_channel_wait_ready(struct fthd_private *dev_priv, struct fw_channel *ch
+ 				msecs_to_jiffies(timeout))) {
+ 		dev_err(&dev_priv->pdev->dev, "%s: timeout\n", chan->name);
+ 		fthd_channel_ringbuf_dump(dev_priv, chan);
++		fthd_hw_hung(dev_priv, chan->name);
+ 		return -ETIMEDOUT;
+ 	}
+ 	return 0;
+diff --git a/fthd_v4l2.c b/fthd_v4l2.c
+index acf8a87..4108928 100644
+--- a/fthd_v4l2.c
++++ b/fthd_v4l2.c
+@@ -135,6 +135,41 @@ static int fthd_buffer_queue_setup(
+ 	return 0;
+ }
+ 
++/*
++ * Frame watchdog: restarted whenever a buffer goes to the firmware or comes
++ * back, so it only fires when the firmware holds buffers and stays silent.
++ */
++void fthd_frame_watchdog_kick(struct fthd_private *dev_priv)
++{
++	mod_delayed_work(system_wq, &dev_priv->frame_watchdog,
++			 msecs_to_jiffies(FTHD_FRAME_TIMEOUT_MS));
++}
++
++void fthd_frame_watchdog_stop(struct fthd_private *dev_priv)
++{
++	cancel_delayed_work_sync(&dev_priv->frame_watchdog);
++}
++
++void fthd_frame_watchdog(struct work_struct *work)
++{
++	struct fthd_private *dev_priv = container_of(to_delayed_work(work),
++					struct fthd_private, frame_watchdog);
++	int i, held = 0;
++
++	if (!READ_ONCE(dev_priv->streaming) ||
++	    READ_ONCE(dev_priv->hw_state) != FTHD_HW_UP)
++		return;
++
++	for (i = 0; i < FTHD_BUFFERS; i++)
++		if (READ_ONCE(dev_priv->h2t_bufs[i].state) == BUF_HW_QUEUED)
++			held++;
++	/* An application that keeps its buffers gets no frames either */
++	if (!held)
++		return;
++
++	fthd_hw_hung(dev_priv, "no frames");
++}
++
+ static struct h2t_buf_ctx *fthd_find_ctx(struct fthd_private *dev_priv,
+ 					  struct vb2_buffer *vb)
+ {
+@@ -275,7 +310,9 @@ static void fthd_buffer_queue(struct vb2_buffer *vb)
+ 	if (fthd_send_h2t_buffer(dev_priv, ctx)) {
+ 		ctx->state = BUF_ALLOC;
+ 		vb2_buffer_done(vb, VB2_BUF_STATE_ERROR);
++		return;
+ 	}
++	fthd_frame_watchdog_kick(dev_priv);
+ }
+ 
+ static int fthd_buffer_prepare(struct vb2_buffer *vb)
+@@ -365,6 +402,7 @@ void fthd_buffer_return_handler(struct fthd_private *dev_priv, u32 offset, int s
+ 
+ 			ctx->state = BUF_ALLOC;
+ 			vb2_buffer_done(ctx->vb, VB2_BUF_STATE_DONE);
++			fthd_frame_watchdog_kick(dev_priv);
+ 		}
+ 
+ 	}
+@@ -397,6 +435,7 @@ int fthd_v4l2_stream_restart(struct fthd_private *dev_priv)
+ 			vb2_buffer_done(ctx->vb, VB2_BUF_STATE_ERROR);
+ 		}
+ 	}
++	fthd_frame_watchdog_kick(dev_priv);
+ 	return 0;
+ }
+ 
+@@ -480,6 +519,12 @@ static int fthd_start_streaming(struct vb2_queue *vq, unsigned int count)
+ 	}
+ 
+ 	ret = fthd_v4l2_stream_restart(dev_priv);
++	if (ret && dev_priv->hw_state == FTHD_HW_FAILED) {
++		/* The firmware hung while the camera was idle; restart it once */
++		ret = fthd_hw_restart(dev_priv, true);
++		if (!ret)
++			ret = fthd_v4l2_stream_restart(dev_priv);
++	}
+ 	if (ret)
+ 		goto fail;
+ 
+@@ -495,29 +540,30 @@ fail:
+ static void fthd_stop_streaming(struct vb2_queue *vq)
+ {
+ 	struct fthd_private *dev_priv = vb2_get_drv_priv(vq);
+-	struct h2t_buf_ctx *ctx;
+-	int ret, i;
++	int ret;
+ 
+ 	dev_priv->streaming = false;
++	fthd_frame_watchdog_stop(dev_priv);
+ 	ret = fthd_stop_channel(dev_priv, 0);
+ 
+ 	/* Buffers never sent to the firmware will not come back from it */
+ 	fthd_return_drv_buffers(dev_priv, VB2_BUF_STATE_ERROR);
+ 
+-	if (!ret) {
+-		pr_debug("waiting for buffers...\n");
+-		vb2_wait_for_all_buffers(vq);
+-		pr_debug("done\n");
+-	} else {
+-	    /* Firmware doesn't respond. */
+-	    for(i = 0; i < FTHD_BUFFERS;i++) {
+-		    ctx = dev_priv->h2t_bufs + i;
+-		    if (ctx->state == BUF_DRV_QUEUED || ctx->state == BUF_HW_QUEUED) {
+-			    vb2_buffer_done(ctx->vb, VB2_BUF_STATE_ERROR);
+-			    ctx->state = BUF_ALLOC;
+-		}
+-	    }
+-	}
++	/* After a channel stop the firmware returns what it holds */
++	if (!ret && wait_event_timeout(vq->done_wq,
++				       !atomic_read(&vq->owned_by_drv_count),
++				       msecs_to_jiffies(FTHD_FRAME_TIMEOUT_MS)))
++		return;
++
++	/*
++	 * The firmware does not respond or keeps buffers. Cut its power before
++	 * the buffers go back, so it cannot write into them any more.
++	 */
++	if (dev_priv->hw_state == FTHD_HW_UP)
++		dev_err(&dev_priv->pdev->dev,
++			"firmware did not return its buffers, stopping the chip\n");
++	fthd_hw_halt(dev_priv);
++	fthd_return_drv_buffers(dev_priv, VB2_BUF_STATE_ERROR);
+ }
+ 
+ static struct vb2_ops vb2_queue_ops = {
+diff --git a/fthd_v4l2.h b/fthd_v4l2.h
+index 001f9ca..0c9fb22 100644
+--- a/fthd_v4l2.h
++++ b/fthd_v4l2.h
+@@ -33,6 +33,9 @@ extern void fthd_v4l2_unregister(struct fthd_private *dev_priv);
+ extern void fthd_v4l2_buffers_unmap(struct fthd_private *dev_priv);
+ extern int fthd_v4l2_buffers_remap(struct fthd_private *dev_priv);
+ extern int fthd_v4l2_stream_restart(struct fthd_private *dev_priv);
++extern void fthd_frame_watchdog(struct work_struct *work);
++extern void fthd_frame_watchdog_kick(struct fthd_private *dev_priv);
++extern void fthd_frame_watchdog_stop(struct fthd_private *dev_priv);
+ extern void fthd_v4l2_buffers_error(struct fthd_private *dev_priv);
+ 
+ #endif
+-- 
+2.56.0
+

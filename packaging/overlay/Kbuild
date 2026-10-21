@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Kbuild part of the out-of-tree build of facetimehd as macbook91-facetimehd.
+# Kbuild reads this file in preference to the Makefile, so the Makefile needs
+# no KERNELRELEASE switch; dkms 3 sets KERNELRELEASE on its make command line,
+# which made such a switch skip every target.
+
+macbook91-facetimehd-objs := fthd_ddr.o fthd_hw.o fthd_drv.o fthd_ringbuf.o fthd_isp.o \
+			     fthd_v4l2.o fthd_buffer.o fthd_debugfs.o
+obj-m := macbook91-facetimehd.o
+
+# Source identity for MODULE_VERSION (patch 0012): package version plus a hash
+# of the driver sources, so a verifier can trace the loaded module to its
+# source. Only fthd_* files: the generated *.mod.c must not change the hash.
+SRCID := $(shell cat $(sort $(wildcard $(src)/fthd_*.c $(src)/fthd_*.h)) | sha256sum | cut -c1-16)
+PKGVER ?= 0
+ccflags-y += -DFTHD_SRCID=\"$(PKGVER)+$(SRCID)\"

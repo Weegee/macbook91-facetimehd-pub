@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weegee <748975+Weegee@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 22:41:23 +0200
+Subject: [PATCH] drv: no recovery work after remove, survive an oversized set
+ file
+
+remove and shutdown stop the firmware in the teardown. If the firmware
+is hung, that stop command times out and fthd_hw_hung() queues
+recover_work. Nothing cancelled it again before dev_priv was freed, so
+the work later ran on freed memory. Cancel it after the teardown.
+
+Between the teardown and fthd_v4l2_unregister() a process could still
+open the device and start streaming, which powered the chip up again
+just before it was freed. fthd_start_streaming() now refuses with
+-ENODEV once removing is set; removing is written under the same
+vb2_queue_lock that vb2 holds around start_streaming.
+
+isp_mem_create() returns NULL for a set file larger than its memory
+region, and isp_load_set_file() dereferenced the result. Treat such a
+file like a missing one and continue without calibration.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ fthd_drv.c  | 6 ++++++
+ fthd_isp.c  | 7 +++++++
+ fthd_v4l2.c | 6 ++++++
+ 3 files changed, 19 insertions(+)
+
+diff --git a/fthd_drv.c b/fthd_drv.c
+index e5cb70c..83e0ee8 100644
+--- a/fthd_drv.c
++++ b/fthd_drv.c
+@@ -716,6 +716,12 @@ static void fthd_pci_remove(struct pci_dev *pdev)
+ 	fthd_power_restore(dev_priv);
+ 	mutex_unlock(&dev_priv->vb2_queue_lock);
+ 
++	/*
++	 * A firmware stop that timed out in the teardown queued a recovery;
++	 * it must not run once dev_priv is freed.
++	 */
++	cancel_work_sync(&dev_priv->recover_work);
++
+ 	fthd_v4l2_unregister(dev_priv);
+ 
+ 	pci_set_drvdata(pdev, NULL);
+diff --git a/fthd_isp.c b/fthd_isp.c
+index edc4a97..2008431 100644
+--- a/fthd_isp.c
++++ b/fthd_isp.c
+@@ -636,6 +636,13 @@ int fthd_isp_cmd_set_loadfile(struct fthd_private *dev_priv)
+ 		isp_free_set_file(dev_priv);
+ 
+ 	file = isp_mem_create(dev_priv, FTHD_MEM_SET_FILE, fw->size);
++	if (!file) {
++		dev_warn(&dev_priv->pdev->dev,
++			 "set file %s does not fit (%zu bytes), continuing without calibration\n",
++			 filename, fw->size);
++		release_firmware(fw);
++		return 0;
++	}
+ 	FTHD_S2_MEMCPY_TOIO(file->offset, fw->data, fw->size);
+ 
+ 	release_firmware(fw);
+diff --git a/fthd_v4l2.c b/fthd_v4l2.c
+index cd35f46..985905b 100644
+--- a/fthd_v4l2.c
++++ b/fthd_v4l2.c
+@@ -512,6 +512,12 @@ static int fthd_start_streaming(struct vb2_queue *vq, unsigned int count)
+ 	dev_priv->sequence = 0;
+ 	cancel_delayed_work(&dev_priv->idle_work);
+ 
++	/* remove tears the chip down and frees it; don't bring it up again */
++	if (dev_priv->removing) {
++		ret = -ENODEV;
++		goto fail;
++	}
++
+ 	/* A failed recovery or suspend left the chip down; try once more */
+ 	if (dev_priv->hw_state != FTHD_HW_UP) {
+ 		ret = fthd_hw_restart(dev_priv, true);
+-- 
+2.56.0
+

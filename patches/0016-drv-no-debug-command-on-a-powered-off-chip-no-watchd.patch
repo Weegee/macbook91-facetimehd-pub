@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weegee <748975+Weegee@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 10:17:56 +0200
+Subject: [PATCH 16/16] drv: no debug command on a powered-off chip, no
+ watchdog after teardown
+
+The debugfs file debug sent a firmware debug command without checking
+that the firmware runs. Since the chip is powered off while idle and
+its command memory and channels are freed on teardown, a write a few
+seconds after the last stream dereferenced NULL.
+fthd_isp_debug_cmd() now returns -EIO unless the firmware is up, like
+fthd_isp_cmd().
+
+fthd_hw_teardown() stopped the frame watchdog before it quiesced the
+interrupt work, which re-arms the watchdog for every buffer it returns,
+so the watchdog could stay queued after the teardown. It is now stopped
+after the quiesce, and remove cancels it before dev_priv is freed.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ fthd_drv.c | 7 +++++--
+ fthd_isp.c | 4 ++++
+ 2 files changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/fthd_drv.c b/fthd_drv.c
+index 41e0e70..5dd27a2 100644
+--- a/fthd_drv.c
++++ b/fthd_drv.c
+@@ -434,8 +434,9 @@ static void fthd_hw_teardown(struct fthd_private *dev_priv)
+ 		fthd_stop_firmware(dev_priv);
+ 
+ 	dev_priv->hw_state = FTHD_HW_DOWN;
+-	fthd_frame_watchdog_stop(dev_priv);
+ 	fthd_hw_quiesce(dev_priv);
++	/* Only now: the irq work re-arms it for every buffer it returns */
++	fthd_frame_watchdog_stop(dev_priv);
+ 	/* Descriptors and IOMMU entries live in S2 memory */
+ 	fthd_v4l2_buffers_unmap(dev_priv);
+ 	isp_uninit(dev_priv);
+@@ -718,9 +719,11 @@ static void fthd_pci_remove(struct pci_dev *pdev)
+ 
+ 	/*
+ 	 * A firmware stop that timed out in the teardown queued a recovery;
+-	 * it must not run once dev_priv is freed.
++	 * it must not run once dev_priv is freed, and neither may a frame
++	 * watchdog that is still pending.
+ 	 */
+ 	cancel_work_sync(&dev_priv->recover_work);
++	cancel_delayed_work_sync(&dev_priv->frame_watchdog);
+ 
+ 	fthd_v4l2_unregister(dev_priv);
+ 
+diff --git a/fthd_isp.c b/fthd_isp.c
+index 2008431..0f781f0 100644
+--- a/fthd_isp.c
++++ b/fthd_isp.c
+@@ -370,6 +370,10 @@ int fthd_isp_debug_cmd(struct fthd_private *dev_priv, enum fthd_isp_cmds command
+ 	u32 entry;
+ 	int len, ret;
+ 
++	/* A powered off chip has no debug channel and no command memory */
++	if (dev_priv->hw_state != FTHD_HW_UP)
++		return -EIO;
++
+ 	memset(&cmd, 0, sizeof(cmd));
+ 
+ 	if (response_len) {
+-- 
+2.56.0
+

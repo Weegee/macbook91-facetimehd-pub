@@ -1,0 +1,5 @@
+[ 6930.565016] testhost kernel: PM: suspend entry (deep)
+[ 6932.157862] testhost kernel: ACPI: PM: Preparing to enter system sleep state S3
+[ 6932.160044] testhost kernel: ACPI: PM: Saving platform NVS memory
+[ 6932.160643] testhost kernel: ACPI: PM: Low-level resume complete
+[ 6932.469281] testhost kernel: PM: suspend exit

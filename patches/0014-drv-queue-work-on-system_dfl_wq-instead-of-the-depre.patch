@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weegee <748975+Weegee@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 09:52:25 +0200
+Subject: [PATCH] drv: queue work on system_dfl_wq instead of the deprecated
+ system_wq
+
+Linux 7.2 marks system_wq (and system_unbound_wq) deprecated and logs
+"enqueued on deprecated workqueue" once per work function; on the test
+machine this appears for fthd_idle_work on every boot.
+
+The idle power-off, the frame watchdog and the recovery need no CPU
+locality and sleep for long (power cycle, firmware boot), so they go
+to the unbound system_dfl_wq. recover_work moves from schedule_work()
+to queue_work(system_dfl_wq, ...).
+
+irq_work stays on schedule_work(): that is system_percpu_wq since
+6.17, not deprecated, and keeps the bottom half on the interrupted
+CPU.
+
+system_dfl_wq exists since 6.17. Older kernels get system_unbound_wq,
+which is the same unbound queue under its old name.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ fthd_drv.c  | 4 ++--
+ fthd_drv.h  | 5 +++++
+ fthd_v4l2.c | 2 +-
+ 3 files changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/fthd_drv.c b/fthd_drv.c
+index 83e0ee8..41e0e70 100644
+--- a/fthd_drv.c
++++ b/fthd_drv.c
+@@ -640,7 +640,7 @@ out:
+ 
+ void fthd_schedule_recovery(struct fthd_private *dev_priv)
+ {
+-	schedule_work(&dev_priv->recover_work);
++	queue_work(system_dfl_wq, &dev_priv->recover_work);
+ }
+ 
+ static void fthd_idle_work(struct work_struct *work)
+@@ -662,7 +662,7 @@ void fthd_schedule_idle(struct fthd_private *dev_priv)
+ 
+ 	if (ms >= 0 && !dev_priv->streaming && !dev_priv->powered_off &&
+ 	    !dev_priv->suspended && !dev_priv->removing)
+-		mod_delayed_work(system_wq, &dev_priv->idle_work,
++		mod_delayed_work(system_dfl_wq, &dev_priv->idle_work,
+ 				 msecs_to_jiffies(ms));
+ }
+ 
+diff --git a/fthd_drv.h b/fthd_drv.h
+index 7c040b4..2a6af53 100644
+--- a/fthd_drv.h
++++ b/fthd_drv.h
+@@ -25,6 +25,11 @@
+ #include "fthd_buffer.h"
+ #include "fthd_v4l2.h"
+ 
++/* system_dfl_wq was added in 6.17; before that it was system_unbound_wq */
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 17, 0)
++#define system_dfl_wq system_unbound_wq
++#endif
++
+ #define FTHD_PCI_S2_IO  0
+ #define FTHD_PCI_S2_MEM 2
+ #define FTHD_PCI_ISP_IO 4
+diff --git a/fthd_v4l2.c b/fthd_v4l2.c
+index 985905b..220d840 100644
+--- a/fthd_v4l2.c
++++ b/fthd_v4l2.c
+@@ -141,7 +141,7 @@ static int fthd_buffer_queue_setup(
+  */
+ void fthd_frame_watchdog_kick(struct fthd_private *dev_priv)
+ {
+-	mod_delayed_work(system_wq, &dev_priv->frame_watchdog,
++	mod_delayed_work(system_dfl_wq, &dev_priv->frame_watchdog,
+ 			 msecs_to_jiffies(FTHD_FRAME_TIMEOUT_MS));
+ }
+ 
+-- 
+2.56.0
+

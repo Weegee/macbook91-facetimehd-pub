@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pschatzmann <phil.schatzmann@gmail.com>
+Date: Wed, 30 Sep 2026 15:57:16 +0200
+Subject: [PATCH 2/4] v4l2: undo a partial buffer setup when an IOMMU mapping
+ fails
+
+When iommu_allocate_sgtable() fails, fthd_buffer_prepare() returned
+with the context still in BUF_ALLOC, owning the vb, its descriptor
+object and any planes mapped so far, and a NULL plane pointer. The next
+prepare of the same vb skips the allocation and dereferences
+ctx->plane[0]->offset.
+
+Release what was set up and put the context back to BUF_FREE.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ fthd_v4l2.c | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/fthd_v4l2.c b/fthd_v4l2.c
+index d4649a8..2120802 100644
+--- a/fthd_v4l2.c
++++ b/fthd_v4l2.c
+@@ -203,7 +203,7 @@ static int fthd_buffer_prepare(struct vb2_buffer *vb)
+ 		  sgtable = vb2_dma_sg_plane_desc(vb, i);
+ 		  ctx->plane[i] = iommu_allocate_sgtable(dev_priv, sgtable);
+ 		  if(!ctx->plane[i])
+-			  return -ENOMEM;
++			  goto err_free;
+ 		}
+ 	}
+ 
+@@ -229,6 +229,17 @@ static int fthd_buffer_prepare(struct vb2_buffer *vb)
+ 	dma_list->desc[0].tag = (u64)ctx;
+ 	init_waitqueue_head(&ctx->wq);
+ 	return 0;
++
++err_free:
++	for(i = 0; i < dev_priv->fmt.planes; i++) {
++		iommu_free(dev_priv, ctx->plane[i]);
++		ctx->plane[i] = NULL;
++	}
++	isp_mem_destroy(ctx->dma_desc_obj);
++	ctx->dma_desc_obj = NULL;
++	ctx->vb = NULL;
++	ctx->state = BUF_FREE;
++	return -ENOMEM;
+ }
+ 
+ void fthd_buffer_return_handler(struct fthd_private *dev_priv, u32 offset, int size)
+-- 
+2.56.0
+

@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weegee <748975+Weegee@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 13:12:28 +0200
+Subject: [PATCH 11/11] debugfs: name the directory after the module
+
+The MacBook9,1 package builds the driver as macbook91-facetimehd, so the
+debugfs directory follows KBUILD_MODNAME instead of a fixed name.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ fthd_debugfs.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/fthd_debugfs.c b/fthd_debugfs.c
+index deb6318..1b06914 100644
+--- a/fthd_debugfs.c
++++ b/fthd_debugfs.c
+@@ -251,7 +251,7 @@ int fthd_debugfs_init(struct fthd_private *dev_priv)
+ {
+ 	struct dentry *d, *top;
+ 
+-	top = debugfs_create_dir("facetimehd", NULL);
++	top = debugfs_create_dir(KBUILD_MODNAME, NULL);
+ 	if (IS_ERR(top))
+ 		return PTR_ERR(top);
+ 
+-- 
+2.56.0
+

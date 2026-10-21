@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weegee <748975+Weegee@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 19:31:25 +0200
+Subject: [PATCH] v4l2: list discrete frame sizes instead of one stepwise range
+
+VIDIOC_ENUM_FRAMESIZES reported a single stepwise range from 320x240 to
+the sensor size. Chromium does not support stepwise frame sizes: its
+V4L2 capture skips them (crbug.com/249953) and then drops a device that
+has no usable format, and libwebrtc's PipeWire camera accepts only fixed
+sizes and removes cameras without capabilities. The camera was therefore
+missing from every Chromium-based browser, e.g. "Camera or microphone not
+found" in WhatsApp Web, while v4l2-ctl and PipeWire listed it.
+
+Report fixed sizes instead: 320x240, 424x240, 640x360, 640x480, 848x480
+and 1280x720 where they fit the sensor, and the sensor's native size
+last (848x588 on the MacBook9,1). The ISP crops centred to the requested
+aspect ratio before scaling, so the 16:9 sizes are not distorted.
+TRY_FMT and S_FMT still accept any size within the range.
+---
+ fthd_v4l2.c | 44 ++++++++++++++++++++++++++++++++++----------
+ 1 file changed, 34 insertions(+), 10 deletions(-)
+
+diff --git a/fthd_v4l2.c b/fthd_v4l2.c
+index c4a8e59..db6b038 100644
+--- a/fthd_v4l2.c
++++ b/fthd_v4l2.c
+@@ -890,24 +890,48 @@ static int fthd_v4l2_ioctl_g_selection(struct file *filp, void *priv,
+ 	return 0;
+ }
+ 
++/* Frame sizes reported to userspace, smallest first. Chromium skips stepwise
++ * frame sizes, both in its V4L2 capture and in libwebrtc's PipeWire camera,
++ * and then drops the camera altogether, so the sizes are listed one by one.
++ * The ISP crops centred to the requested aspect ratio and scales, so these
++ * common 4:3 and 16:9 sizes are not distorted. Sizes above the sensor are
++ * left out; the sensor's native size always comes last. */
++static const struct {
++	unsigned int width, height;
++} fthd_frame_sizes[] = {
++	{ 320, 240 }, { 424, 240 }, { 640, 360 }, { 640, 480 }, { 848, 480 },
++	{ 1280, 720 },
++};
++
+ static int fthd_v4l2_ioctl_enum_framesizes(struct file *filp, void *priv,
+ 		struct v4l2_frmsizeenum *sizes)
+ {
+ 	struct fthd_private *dev_priv = video_drvdata(filp);
+-
+-	if (sizes->index)
+-		return -EINVAL;
++	unsigned int max_w = (dev_priv->sensor_width ? : FTHD_MAX_WIDTH) & ~7u;
++	unsigned int max_h = dev_priv->sensor_height ? : FTHD_MAX_HEIGHT;
++	unsigned int i, n = 0;
+ 
+ 	if (sizes->pixel_format != V4L2_PIX_FMT_YUYV)
+ 		return -EINVAL;
+ 
+-	sizes->type = V4L2_FRMSIZE_TYPE_STEPWISE;
+-	sizes->stepwise.min_width  = FTHD_MIN_WIDTH;
+-	sizes->stepwise.max_width  = dev_priv->sensor_width  ? : FTHD_MAX_WIDTH;
+-	sizes->stepwise.step_width = 8;
+-	sizes->stepwise.min_height  = FTHD_MIN_HEIGHT;
+-	sizes->stepwise.max_height  = dev_priv->sensor_height ? : FTHD_MAX_HEIGHT;
+-	sizes->stepwise.step_height = 1;
++	sizes->type = V4L2_FRMSIZE_TYPE_DISCRETE;
++	for (i = 0; i < ARRAY_SIZE(fthd_frame_sizes); i++) {
++		unsigned int w = fthd_frame_sizes[i].width;
++		unsigned int h = fthd_frame_sizes[i].height;
++
++		if (w > max_w || h > max_h || (w == max_w && h == max_h))
++			continue;
++		if (n++ == sizes->index) {
++			sizes->discrete.width = w;
++			sizes->discrete.height = h;
++			return 0;
++		}
++	}
++
++	if (sizes->index != n)
++		return -EINVAL;
++	sizes->discrete.width = max_w;
++	sizes->discrete.height = max_h;
+ 
+ 	return 0;
+ }
+-- 
+2.56.0
+

@@ -1,0 +1,19 @@
+System Information
+	Manufacturer: Apple Inc.
+	Product Name: MacBook9,1
+	Version: 1.0
+	Wake-up Type: Power Switch
+	SKU Number:  
+	Family: MacBook
+
+Base Board Information
+	Manufacturer: Apple Inc.
+	Product Name: Mac-9AE82516C7C6B903
+	Version: MacBook9,1
+	Features:
+		Board is a hosting board
+	Location In Chassis:  
+	Chassis Handle: 0x000E
+	Type: Motherboard
+	Contained Object Handles: 0
+

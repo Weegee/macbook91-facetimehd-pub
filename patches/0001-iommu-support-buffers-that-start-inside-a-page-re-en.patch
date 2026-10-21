@@ -1,0 +1,182 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pschatzmann <phil.schatzmann@gmail.com>
+Date: Wed, 30 Sep 2026 15:57:01 +0200
+Subject: [PATCH 1/4] iommu: support buffers that start inside a page,
+ re-enable USERPTR
+
+Commits 254563b and 7adbc5f refuse buffers that aren't page aligned
+and stop advertising VB2_USERPTR. That breaks PipeWire, which is how
+browsers and most desktop apps reach the camera: PipeWire 1.0.5
+(Ubuntu 24.04) imports its own memfd buffers as USERPTR. When that
+fails it falls back to mmap(MAP_PRIVATE), which vb2 rejects:
+
+  spa.v4l2: '/dev/video0' mmap: Invalid argument
+
+and PipeWire then crashes with SIGSEGV in libspa-v4l2.
+
+The page-only mapping is an IOMMU limitation, not a firmware one. The
+descriptor address handed to the firmware is a byte address, so map
+every page the buffer touches and add the offset into the first page
+to addr0/addr1/addr2. Only a gap inside the buffer can't be expressed,
+so segments other than the first must start on a page boundary and
+segments other than the last must end on one.
+
+While at it, walk the table with for_each_sg(). Indexing sgtable->sgl
+is wrong for chained scatterlists (more than ~127 entries; a 720p YUYV
+frame is 450 pages), and reads past the chain link.
+
+Tested on a MacBookAir6,1 (14e4:1570): USERPTR buffers starting 0,
+0x40, 0x100 and 0x800 bytes into a page, 150 frames each, with guard
+bytes before and after every buffer. No guard byte was touched and the
+image lines up with the aligned case. Through PipeWire,
+"gst-launch-1.0 pipewiresrc num-buffers=1800 ! fakesink" delivers all
+1800 frames at 30 fps.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ fthd_buffer.c | 58 +++++++++++++++++++++++++++------------------------
+ fthd_buffer.h |  2 ++
+ fthd_v4l2.c   | 11 ++++++----
+ 3 files changed, 40 insertions(+), 31 deletions(-)
+
+diff --git a/fthd_buffer.c b/fthd_buffer.c
+index 7687455..983dd18 100644
+--- a/fthd_buffer.c
++++ b/fthd_buffer.c
+@@ -10,6 +10,7 @@
+ #include <linux/delay.h>
+ #include <linux/dma-mapping.h>
+ #include <linux/printk.h>
++#include <linux/scatterlist.h>
+ #include "fthd_drv.h"
+ #include "fthd_isp.h"
+ #include "fthd_hw.h"
+@@ -39,33 +40,37 @@ struct iommu_obj *iommu_allocate_sgtable(struct fthd_private *dev_priv, struct s
+ 	struct resource *root = dev_priv->iommu;
+ 	struct scatterlist *sg;
+ 	int ret, i, pos;
+-	int total_len = 0, dma_length;
+-	dma_addr_t dma_addr;
+-	
+-	for(i = 0; i < sgtable->nents; i++) {
+-		sg = sgtable->sgl + i;
+-
+-		/* The IOMMU descriptor holds a page number only, so a segment
+-		 * that does not start on a page boundary would be mapped from
+-		 * the start of its page and the hardware would write up to
+-		 * 4095 bytes in front of the buffer.
+-		 */
+-		if (sg->offset || (sg_dma_address(sg) & 0xfff)) {
++	int total_len = 0;
++	dma_addr_t dma_addr, dma_end, page;
++
++	/*
++	 * Large buffers use chained scatterlists, so the entries must be
++	 * walked with for_each_sg() and not by indexing sgtable->sgl.
++	 *
++	 * The S2 IOMMU maps whole pages. The firmware accepts a byte address
++	 * though, so a buffer may start inside its first page (USERPTR
++	 * buffers from PipeWire start 0x40-0x100 bytes into a page): all
++	 * pages it touches are mapped and the offset is kept in byte_offset.
++	 * A gap inside the buffer can't be expressed, so only the start of
++	 * the first segment and the end of the last one may be unaligned.
++	 */
++	for_each_sg(sgtable->sgl, sg, sgtable->nents, i) {
++		dma_addr = sg_dma_address(sg);
++		dma_end = dma_addr + sg_dma_len(sg);
++
++		if ((i > 0 && (dma_addr & 0xfff)) ||
++		    (i < sgtable->nents - 1 && (dma_end & 0xfff))) {
+ 			dev_err(&dev_priv->pdev->dev,
+-				"Buffer segment %d is not page aligned (offset %u), refusing\n",
+-				i, sg->offset);
++				"Buffer segment %d is not page aligned (%pad, len %u), refusing\n",
++				i, &dma_addr, sg_dma_len(sg));
+ 			return NULL;
+ 		}
+-
+-		total_len += sg_dma_len(sg);
++		total_len += GET_IOMMU_PAGES(dma_end) - (dma_addr >> 12);
+ 	}
+-	
++
+ 	if (!total_len)
+ 		return NULL;
+ 
+-	total_len += 4095;
+-	total_len /= 4096;
+-	
+ 	obj = kzalloc(sizeof(struct iommu_obj), GFP_KERNEL);
+ 	if (!obj)
+ 		return NULL;
+@@ -84,16 +89,15 @@ struct iommu_obj *iommu_allocate_sgtable(struct fthd_private *dev_priv, struct s
+ 
+ 	obj->offset = obj->base.start - root->start;
+ 	obj->size = total_len;
++	obj->byte_offset = sg_dma_address(sgtable->sgl) & 0xfff;
+ 
+ 	pos = 0x9000 + obj->offset * 4;
+-	for(i = 0; i < sgtable->nents; i++) {
+-		sg = sgtable->sgl + i;
++	for_each_sg(sgtable->sgl, sg, sgtable->nents, i) {
+ 		dma_addr = sg_dma_address(sg);
+-		dma_addr >>= 12;
+-		
+-		for(dma_length = 0; dma_length < sg_dma_len(sg); dma_length += 0x1000) {
+-		  //			pr_debug("IOMMU %08x -> %08llx (dma length %d)\n", pos, dma_addr, dma_length);
+-			FTHD_S2_REG_WRITE(dma_addr++, pos);
++		dma_end = dma_addr + sg_dma_len(sg);
++
++		for(page = dma_addr >> 12; page < GET_IOMMU_PAGES(dma_end); page++) {
++			FTHD_S2_REG_WRITE(page, pos);
+ 			pos += 4;
+ 		}
+ 	}
+diff --git a/fthd_buffer.h b/fthd_buffer.h
+index 2e76ded..ec43053 100644
+--- a/fthd_buffer.h
++++ b/fthd_buffer.h
+@@ -42,6 +42,8 @@ struct iommu_obj {
+ 	struct resource base;
+ 	int size;
+ 	int offset;
++	/* Byte offset of the buffer start within its first page */
++	int byte_offset;
+ };
+ 
+ struct fthd_plane {
+diff --git a/fthd_v4l2.c b/fthd_v4l2.c
+index b1c1c94..d4649a8 100644
+--- a/fthd_v4l2.c
++++ b/fthd_v4l2.c
+@@ -216,12 +216,15 @@ static int fthd_buffer_prepare(struct vb2_buffer *vb)
+ 	dma_list->count = 1;
+ 	dma_list->desc[0].count = 1;
+ 	dma_list->desc[0].pool = 0x02;
+-	dma_list->desc[0].addr0 = (ctx->plane[0]->offset << 12) | 0xc0000000;
++	dma_list->desc[0].addr0 = ((ctx->plane[0]->offset << 12) | 0xc0000000) +
++		ctx->plane[0]->byte_offset;
+ 
+ 	if (dev_priv->fmt.planes >= 2)
+-		dma_list->desc[0].addr1 = (ctx->plane[1]->offset << 12) | 0xc0000000;
++		dma_list->desc[0].addr1 = ((ctx->plane[1]->offset << 12) | 0xc0000000) +
++		ctx->plane[1]->byte_offset;
+ 	if (dev_priv->fmt.planes >= 3)
+-		dma_list->desc[0].addr2 = (ctx->plane[2]->offset << 12) | 0xc0000000;
++		dma_list->desc[0].addr2 = ((ctx->plane[2]->offset << 12) | 0xc0000000) +
++		ctx->plane[2]->byte_offset;
+ 
+ 	dma_list->desc[0].tag = (u64)ctx;
+ 	init_waitqueue_head(&ctx->wq);
+@@ -741,7 +744,7 @@ int fthd_v4l2_register(struct fthd_private *dev_priv)
+ 	/* VB2_USERPTR not supported due to missing support for unaligned
+ 	 * pointers.
+ 	 */
+-	q->io_modes = VB2_MMAP | VB2_DMABUF | VB2_READ;
++	q->io_modes = VB2_MMAP | VB2_USERPTR | VB2_DMABUF | VB2_READ;
+ 	q->drv_priv = dev_priv;
+ 	q->ops = &vb2_queue_ops;
+ 	q->mem_ops = &vb2_dma_sg_memops;
+-- 
+2.56.0
+

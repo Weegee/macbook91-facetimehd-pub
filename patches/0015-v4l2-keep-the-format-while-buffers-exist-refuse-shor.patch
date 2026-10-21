@@ -1,0 +1,76 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weegee <748975+Weegee@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 10:17:46 +0200
+Subject: [PATCH 15/16] v4l2: keep the format while buffers exist, refuse short
+ buffers
+
+VIDIOC_S_FMT stored a new format at any time and from any file handle,
+also while another handle streamed or after REQBUFS. The buffers keep
+the size of the old format, but every stream start and every restart
+from recovery or resume programs the firmware with the stored format,
+so a larger format made the ISP write whole frames past the end of the
+buffers through the S2 IOMMU.
+
+S_FMT now takes vb2_queue_lock, as S_PARM does, and returns -EBUSY
+while the queue has buffers (vb2_is_busy()), as uvcvideo does; an
+application frees its buffers (REQBUFS 0) before it changes the format.
+
+buf_prepare refuses a buffer smaller than a frame of the current
+format.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ fthd_v4l2.c | 19 +++++++++++++++++--
+ 1 file changed, 17 insertions(+), 2 deletions(-)
+
+diff --git a/fthd_v4l2.c b/fthd_v4l2.c
+index 220d840..c4a8e59 100644
+--- a/fthd_v4l2.c
++++ b/fthd_v4l2.c
+@@ -322,6 +322,10 @@ static int fthd_buffer_prepare(struct vb2_buffer *vb)
+ 	int i, ret;
+ 
+ 	pr_debug("%p\n", vb);
++	/* The firmware writes a whole frame of the current format */
++	if (vb2_plane_size(vb, 0) < dev_priv->fmt.fmt.sizeimage)
++		return -EINVAL;
++
+ 	for(i = 0; i < FTHD_BUFFERS; i++) {
+ 		if (dev_priv->h2t_bufs[i].state == BUF_FREE ||
+ 		    (dev_priv->h2t_bufs[i].state == BUF_ALLOC && dev_priv->h2t_bufs[i].vb == vb)) {
+@@ -780,12 +784,22 @@ static int fthd_v4l2_ioctl_s_fmt_vid_cap(struct file *filp, void *priv,
+ 	if (fmt->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
+ 		return -EINVAL;
+ 
+-	/* FIXME: Check if hardware is busy */
+-
+ 	ret = fthd_v4l2_adjust_format(dev_priv, &fmt->fmt.pix);
+ 	if (ret)
+ 		return ret;
+ 
++	ret = mutex_lock_interruptible(&dev_priv->vb2_queue_lock);
++	if (ret)
++		return ret;
++	/*
++	 * The buffers are sized for the current format, and a stream
++	 * restart (recovery, resume) programs the firmware with it again.
++	 */
++	if (vb2_is_busy(&dev_priv->vb2_queue)) {
++		mutex_unlock(&dev_priv->vb2_queue_lock);
++		return -EBUSY;
++	}
++
+ 	pr_debug("%c%c%c%c\n", fmt->fmt.pix.pixelformat, fmt->fmt.pix.pixelformat >> 8,
+ 		 fmt->fmt.pix.pixelformat >> 16, fmt->fmt.pix.pixelformat >> 24);
+ 
+@@ -799,6 +813,7 @@ static int fthd_v4l2_ioctl_s_fmt_vid_cap(struct file *filp, void *priv,
+ 		dev_priv->fmt.planes = 1;
+ 		break;
+ 	}
++	mutex_unlock(&dev_priv->vb2_queue_lock);
+ 
+ 	return 0;
+ }
+-- 
+2.56.0
+

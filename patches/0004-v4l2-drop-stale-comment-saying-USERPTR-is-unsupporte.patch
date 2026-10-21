@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pschatzmann <phil.schatzmann@gmail.com>
+Date: Sat, 3 Oct 2026 18:05:51 +0200
+Subject: [PATCH 4/4] v4l2: drop stale comment saying USERPTR is unsupported
+
+USERPTR is advertised again since buffers that start inside a page
+are supported.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ fthd_v4l2.c | 3 ---
+ 1 file changed, 3 deletions(-)
+
+diff --git a/fthd_v4l2.c b/fthd_v4l2.c
+index 1904ba3..7e42255 100644
+--- a/fthd_v4l2.c
++++ b/fthd_v4l2.c
+@@ -762,9 +762,6 @@ int fthd_v4l2_register(struct fthd_private *dev_priv)
+ 
+ 	q = &dev_priv->vb2_queue;
+ 	q->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+-	/* VB2_USERPTR not supported due to missing support for unaligned
+-	 * pointers.
+-	 */
+ 	q->io_modes = VB2_MMAP | VB2_USERPTR | VB2_DMABUF | VB2_READ;
+ 	q->drv_priv = dev_priv;
+ 	q->ops = &vb2_queue_ops;
+-- 
+2.56.0
+

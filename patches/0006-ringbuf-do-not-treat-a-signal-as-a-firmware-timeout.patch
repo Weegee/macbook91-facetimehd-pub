@@ -1,0 +1,74 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weegee <748975+Weegee@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 09:41:40 +0200
+Subject: [PATCH 6/9] ringbuf: do not treat a signal as a firmware timeout
+
+fthd_channel_wait_ready() used wait_event_interruptible_timeout() and
+reported any non-positive result as a timeout. A signal to the process
+issuing a command (Ctrl-C in v4l2-ctl, a browser closing a tab) made the
+driver log "IO: timeout" or "BUF_H2T: timeout" within milliseconds and
+free the request while the firmware still owned it. Measured on a
+MacBook9,1: 20 interrupted stream starts produced 60 such false timeouts.
+
+Wait uninterruptibly for at most the given time and switch the IRQ path
+to wake_up() so the uninterruptible sleepers are woken.
+---
+ fthd_drv.c     |  6 +++---
+ fthd_ringbuf.c | 12 +++++++++---
+ 2 files changed, 12 insertions(+), 6 deletions(-)
+
+diff --git a/fthd_drv.c b/fthd_drv.c
+index b85b44d..bf163f8 100644
+--- a/fthd_drv.c
++++ b/fthd_drv.c
+@@ -186,19 +186,19 @@ static void fthd_handle_irq(struct fthd_private *dev_priv, struct fw_channel *ch
+ 
+ 	if (chan == dev_priv->channel_io) {
+ 		pr_debug("IO channel ready\n");
+-		wake_up_interruptible(&chan->wq);
++		wake_up(&chan->wq);
+ 		return;
+ 	}
+ 
+ 	if (chan == dev_priv->channel_buf_h2t) {
+ 		pr_debug("H2T channel ready\n");
+-		wake_up_interruptible(&chan->wq);
++		wake_up(&chan->wq);
+ 		return;
+ 	}
+ 
+ 	if (chan == dev_priv->channel_debug) {
+ 		pr_debug("DEBUG channel ready\n");
+-		wake_up_interruptible(&chan->wq);
++		wake_up(&chan->wq);
+ 		return;
+ 	}
+ 
+diff --git a/fthd_ringbuf.c b/fthd_ringbuf.c
+index 7b099ae..9699800 100644
+--- a/fthd_ringbuf.c
++++ b/fthd_ringbuf.c
+@@ -122,11 +122,17 @@ out:
+ 	return ret;
+ }
+ 
++/*
++ * The firmware keeps using the request until it flips the ownership bit, so
++ * the caller must not free it early: wait without being interruptible, or a
++ * signal to the calling process looks like a firmware timeout and the
++ * request memory is reused while the firmware may still write into it.
++ */
+ int fthd_channel_wait_ready(struct fthd_private *dev_priv, struct fw_channel *chan, u32 entry, int timeout)
+ {
+-	if (wait_event_interruptible_timeout(chan->wq,
+-					     (FTHD_S2_MEM_READ(entry + FTHD_RINGBUF_ADDRESS_FLAGS) & 1) ^ (chan->type != 0),
+-		msecs_to_jiffies(timeout)) <= 0) {
++	if (!wait_event_timeout(chan->wq,
++				(FTHD_S2_MEM_READ(entry + FTHD_RINGBUF_ADDRESS_FLAGS) & 1) ^ (chan->type != 0),
++				msecs_to_jiffies(timeout))) {
+ 		dev_err(&dev_priv->pdev->dev, "%s: timeout\n", chan->name);
+ 		fthd_channel_ringbuf_dump(dev_priv, chan);
+ 		return -ETIMEDOUT;
+-- 
+2.56.0
+

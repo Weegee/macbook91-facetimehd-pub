@@ -1,0 +1,1219 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weegee <748975+Weegee@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 09:54:33 +0200
+Subject: [PATCH 7/9] drv: split probe into setup and hardware bring-up, add
+ power-cycle recovery
+
+Probe and remove did everything in one sequence, so the only way to
+restart the camera was unloading the driver. Separate the one-time PCI
+and V4L2 setup from bringing the S2 chip and ISP firmware up and down,
+and track the hardware state.
+
+fthd_hw_restart() tears the chip down, optionally cuts its power through
+the ACPI CMPE method (off 250 ms, on 20 ms, as the macOS driver does),
+restores the PCI config space, brings the firmware up again and resumes
+a running stream. A work item runs it up to three times; on final
+failure all buffers are returned with an error.
+
+V4L2 buffers now survive a restart: their S2 descriptors and IOMMU
+entries are released on teardown and recreated on bring-up, and buffers
+the firmware held are sent again. Firmware supplied buffer tags are
+checked before use. Controls share the queue lock so they cannot race
+a restart.
+
+Also fixes:
+- double free of the IOMMU allocator on a repeated teardown
+- probe failure leaking the BAR mappings
+- irq_work freeing the interrupt it runs from when the IRQ is stuck;
+  it now only closes the interrupt gate
+- debugfs channel files dereferencing freed channels
+
+debugfs gains "state" and "recover" (write: power cycle and wait).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ fthd_buffer.c  |   1 +
+ fthd_debugfs.c |  68 ++++++++--
+ fthd_drv.c     | 344 +++++++++++++++++++++++++++++++++++++-----------
+ fthd_drv.h     |  21 +++
+ fthd_isp.c     |   9 +-
+ fthd_isp.h     |   1 +
+ fthd_v4l2.c    | 347 ++++++++++++++++++++++++++++++++++---------------
+ fthd_v4l2.h    |   4 +
+ 8 files changed, 606 insertions(+), 189 deletions(-)
+
+diff --git a/fthd_buffer.c b/fthd_buffer.c
+index 983dd18..39a7751 100644
+--- a/fthd_buffer.c
++++ b/fthd_buffer.c
+@@ -125,6 +125,7 @@ void iommu_free(struct fthd_private *dev_priv, struct iommu_obj *obj)
+ static void iommu_allocator_destroy(struct fthd_private *dev_priv)
+ {
+ 	kfree(dev_priv->iommu);
++	dev_priv->iommu = NULL;
+ }
+ 
+ int fthd_buffer_init(struct fthd_private *dev_priv)
+diff --git a/fthd_debugfs.c b/fthd_debugfs.c
+index 50ab5a7..e4f3240 100644
+--- a/fthd_debugfs.c
++++ b/fthd_debugfs.c
+@@ -77,7 +77,9 @@ static ssize_t fthd_store_debug(struct file *file, const char __user *user_buf,
+ 		return -EINVAL;
+ 	cmd.show_errors = 1;
+ 
++	mutex_lock(&dev_priv->vb2_queue_lock);
+ 	ret = fthd_isp_debug_cmd(dev_priv, opcode, &cmd, sizeof(cmd), NULL);
++	mutex_unlock(&dev_priv->vb2_queue_lock);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -86,12 +88,22 @@ static ssize_t fthd_store_debug(struct file *file, const char __user *user_buf,
+ 
+ 
+ static int seq_channel_read(struct seq_file *seq, struct fthd_private *dev_priv,
+-			struct fw_channel *chan)
++			struct fw_channel **chanp)
+ {
++	struct fw_channel *chan;
+ 	int i;
+ 	char pos;
+ 	u32 entry;
+ 
++	/* Channels exist only while the firmware runs */
++	mutex_lock(&dev_priv->vb2_queue_lock);
++	chan = *chanp;
++	if (dev_priv->hw_state != FTHD_HW_UP || !chan) {
++		seq_puts(seq, "firmware not running\n");
++		mutex_unlock(&dev_priv->vb2_queue_lock);
++		return 0;
++	}
++
+ 	spin_lock_irq(&chan->lock);
+ 	for( i = 0; i < chan->size; i++) {
+ 		if (chan->ringbuf.idx == i)
+@@ -106,6 +118,7 @@ static int seq_channel_read(struct seq_file *seq, struct fthd_private *dev_priv,
+ 			   FTHD_S2_MEM_READ(entry + FTHD_RINGBUF_RESPONSE_SIZE));
+ 	}
+ 	spin_unlock_irq(&chan->lock);
++	mutex_unlock(&dev_priv->vb2_queue_lock);
+ 	return 0;
+ }
+ 
+@@ -113,51 +126,88 @@ static int seq_channel_terminal_read(struct seq_file *seq, void *data)
+ 
+ {
+ 	struct fthd_private *dev_priv = dev_get_drvdata(seq->private);
+-	return seq_channel_read(seq, dev_priv, dev_priv->channel_terminal);
++	return seq_channel_read(seq, dev_priv, &dev_priv->channel_terminal);
+ }
+ 
+ static int seq_channel_sharedmalloc_read(struct seq_file *seq, void *data)
+ 
+ {
+ 	struct fthd_private *dev_priv = dev_get_drvdata(seq->private);
+-	return seq_channel_read(seq, dev_priv, dev_priv->channel_shared_malloc);
++	return seq_channel_read(seq, dev_priv, &dev_priv->channel_shared_malloc);
+ }
+ 
+ static int seq_channel_io_read(struct seq_file *seq, void *data)
+ 
+ {
+ 	struct fthd_private *dev_priv = dev_get_drvdata(seq->private);
+-	return seq_channel_read(seq, dev_priv, dev_priv->channel_io);
++	return seq_channel_read(seq, dev_priv, &dev_priv->channel_io);
+ }
+ 
+ static int seq_channel_io_t2h_read(struct seq_file *seq, void *data)
+ 
+ {
+ 	struct fthd_private *dev_priv = dev_get_drvdata(seq->private);
+-	return seq_channel_read(seq, dev_priv, dev_priv->channel_io_t2h);
++	return seq_channel_read(seq, dev_priv, &dev_priv->channel_io_t2h);
+ }
+ 
+ static int seq_channel_buf_h2t_read(struct seq_file *seq, void *data)
+ 
+ {
+ 	struct fthd_private *dev_priv = dev_get_drvdata(seq->private);
+-	return seq_channel_read(seq, dev_priv, dev_priv->channel_buf_h2t);
++	return seq_channel_read(seq, dev_priv, &dev_priv->channel_buf_h2t);
+ }
+ 
+ static int seq_channel_buf_t2h_read(struct seq_file *seq, void *data)
+ 
+ {
+ 	struct fthd_private *dev_priv = dev_get_drvdata(seq->private);
+-	return seq_channel_read(seq, dev_priv, dev_priv->channel_buf_t2h);
++	return seq_channel_read(seq, dev_priv, &dev_priv->channel_buf_t2h);
+ }
+ 
+ static int seq_channel_debug_read(struct seq_file *seq, void *data)
+ 
+ {
+ 	struct fthd_private *dev_priv = dev_get_drvdata(seq->private);
+-	return seq_channel_read(seq, dev_priv, dev_priv->channel_debug);
++	return seq_channel_read(seq, dev_priv, &dev_priv->channel_debug);
+ }
+ 
++static const char * const fthd_hw_state_names[] = {
++	[FTHD_HW_DOWN] = "down",
++	[FTHD_HW_STARTING] = "starting",
++	[FTHD_HW_UP] = "up",
++	[FTHD_HW_FAILED] = "failed",
++};
++
++static int seq_state_read(struct seq_file *seq, void *data)
++{
++	struct fthd_private *dev_priv = dev_get_drvdata(seq->private);
++
++	mutex_lock(&dev_priv->vb2_queue_lock);
++	seq_printf(seq, "hw_state: %s\nstreaming: %d\nsuspended: %d\nrecoveries: %u\n",
++		   fthd_hw_state_names[dev_priv->hw_state], dev_priv->streaming,
++		   dev_priv->suspended, dev_priv->recover_count);
++	mutex_unlock(&dev_priv->vb2_queue_lock);
++	return 0;
++}
++
++/* Writing anything power cycles the camera and waits for the result */
++static ssize_t fthd_store_recover(struct file *file, const char __user *user_buf,
++				  size_t count, loff_t *ppos)
++{
++	struct fthd_private *dev_priv = file->private_data;
++
++	fthd_schedule_recovery(dev_priv);
++	flush_work(&dev_priv->recover_work);
++	return count;
++}
++
++static const struct file_operations fops_recover = {
++	.write = fthd_store_recover,
++	.open = simple_open,
++	.owner = THIS_MODULE,
++	.llseek = default_llseek,
++};
++
+ static const struct file_operations fops_debug = {
+ 	.read = NULL,
+ 	.write = fthd_store_debug,
+@@ -188,6 +238,8 @@ int fthd_debugfs_init(struct fthd_private *dev_priv)
+ 	debugfs_create_devm_seqfile(&dev_priv->pdev->dev, "channel_buf_t2h", d, seq_channel_buf_t2h_read);
+ 	debugfs_create_devm_seqfile(&dev_priv->pdev->dev, "channel_debug", d, seq_channel_debug_read);
+ 	debugfs_create_file("debug", S_IRUSR | S_IWUSR, d, dev_priv, &fops_debug);
++	debugfs_create_devm_seqfile(&dev_priv->pdev->dev, "state", d, seq_state_read);
++	debugfs_create_file("recover", S_IWUSR, d, dev_priv, &fops_recover);
+ 	dev_priv->debugfs = top;
+ 	return 0;
+ }
+diff --git a/fthd_drv.c b/fthd_drv.c
+index bf163f8..7076741 100644
+--- a/fthd_drv.c
++++ b/fthd_drv.c
+@@ -230,9 +230,12 @@ static void fthd_irq_work(struct work_struct *work)
+ 	struct fw_channel *chan;
+ 
+ 	u32 pending;
+-	int i = 0;
++	int i = 0, loops = 0;
+ 
+-	while(i++ < 500) {
++	if (READ_ONCE(dev_priv->hw_state) == FTHD_HW_DOWN)
++		return;
++
++	while(loops++ < 500) {
+ 		spin_lock_irq(&dev_priv->io_lock);
+ 		pending = FTHD_ISP_REG_READ(ISP_IRQ_STATUS);
+ 		spin_unlock_irq(&dev_priv->io_lock);
+@@ -257,9 +260,11 @@ static void fthd_irq_work(struct work_struct *work)
+ 		}
+ 	}
+ 
+-	if (i >= 500) {
++	if (loops >= 500) {
++		/* Leave the interrupt gate closed; recovery reopens it */
+ 		dev_err(&dev_priv->pdev->dev, "irq stuck, disabling\n");
+-		fthd_irq_uninstall(dev_priv);
++		fthd_irq_disable(dev_priv);
++		return;
+ 	}
+ 	pci_write_config_dword(dev_priv->pdev, 0x94, 0x200);
+ }
+@@ -270,6 +275,9 @@ static irqreturn_t fthd_irq_handler(int irq, void *arg)
+ 	u32 pending;
+ 	unsigned long flags;
+ 
++	if (READ_ONCE(dev_priv->hw_state) == FTHD_HW_DOWN)
++		return IRQ_NONE;
++
+ 	spin_lock_irqsave(&dev_priv->io_lock, flags);
+ 	pending = FTHD_ISP_REG_READ(ISP_IRQ_STATUS);
+ 	spin_unlock_irqrestore(&dev_priv->io_lock, flags);
+@@ -314,47 +322,273 @@ static int fthd_pci_set_dma_mask(struct fthd_private *dev_priv,
+ 
+ static void fthd_stop_firmware(struct fthd_private *dev_priv)
+ {
+-		fthd_isp_cmd_stop(dev_priv);
++	fthd_isp_cmd_stop(dev_priv);
+ 	isp_powerdown(dev_priv);
+ }
+ 
+-static void fthd_pci_remove(struct pci_dev *pdev)
++static void fthd_pci_unmap(struct fthd_private *dev_priv)
+ {
+-	struct fthd_private *dev_priv;
++	struct pci_dev *pdev = dev_priv->pdev;
+ 
+-	dev_priv = pci_get_drvdata(pdev);
+-	if (!dev_priv)
+-		goto out;
+-	pci_set_drvdata(pdev, NULL);
++	if (dev_priv->s2_io)
++		iounmap(dev_priv->s2_io);
++	if (dev_priv->s2_mem)
++		iounmap(dev_priv->s2_mem);
++	if (dev_priv->isp_io)
++		iounmap(dev_priv->isp_io);
+ 
+-	fthd_debugfs_exit(dev_priv);
++	pci_release_region(pdev, FTHD_PCI_S2_IO);
++	pci_release_region(pdev, FTHD_PCI_S2_MEM);
++	pci_release_region(pdev, FTHD_PCI_ISP_IO);
++}
+ 
+-	fthd_v4l2_unregister(dev_priv);
++static int fthd_firmware_start(struct fthd_private *dev_priv)
++{
++	int ret;
+ 
+-	fthd_stop_firmware(dev_priv);
++	ret = fthd_isp_cmd_start(dev_priv);
++	if (ret)
++		return ret;
+ 
+-	fthd_irq_uninstall(dev_priv);
++	ret = fthd_isp_cmd_print_enable(dev_priv, 1);
++	if (ret)
++		return ret;
+ 
++	ret = fthd_isp_cmd_camera_config(dev_priv);
++	if (ret)
++		return ret;
++
++	ret = fthd_isp_cmd_channel_info(dev_priv);
++	if (ret)
++		return ret;
++
++	/* Query the sensor's native resolution now so fthd_v4l2_register()
++	 * can advertise it. Non-fatal: if it fails the V4L2 layer falls back
++	 * to a default size. */
++	fthd_isp_cmd_channel_camera_config(dev_priv);
++
++	return fthd_isp_cmd_set_loadfile(dev_priv);
++
++}
++
++/* Stop interrupt delivery and wait for handlers that are still running. */
++static void fthd_hw_quiesce(struct fthd_private *dev_priv)
++{
++	fthd_irq_disable(dev_priv);
++	synchronize_irq(dev_priv->pdev->irq);
+ 	cancel_work_sync(&dev_priv->irq_work);
++	/* A finishing irq work reopens the interrupt gate */
++	fthd_irq_disable(dev_priv);
++}
+ 
+-	isp_uninit(dev_priv);
++/*
++ * Bring the S2 chip from reset to a running ISP firmware. Everything set up
++ * here lives in S2 memory and is lost when the chip loses power.
++ */
++static int fthd_hw_bringup(struct fthd_private *dev_priv)
++{
++	int ret;
++
++	dev_priv->hw_state = FTHD_HW_STARTING;
++
++	ret = fthd_buffer_init(dev_priv);
++	if (ret)
++		goto fail;
+ 
++	ret = fthd_hw_init(dev_priv);
++	if (ret)
++		goto fail_buffer;
++
++	ret = fthd_firmware_start(dev_priv);
++	if (ret)
++		goto fail_isp;
++
++	dev_priv->hw_state = FTHD_HW_UP;
++	return 0;
++
++fail_isp:
++	dev_priv->hw_state = FTHD_HW_DOWN;
++	fthd_hw_quiesce(dev_priv);
++	isp_uninit(dev_priv);
+ 	fthd_hw_deinit(dev_priv);
++fail_buffer:
++	fthd_buffer_exit(dev_priv);
++fail:
++	dev_priv->hw_state = FTHD_HW_DOWN;
++	return ret;
++}
++
++/*
++ * Undo fthd_hw_bringup(). The firmware is only asked to stop when it is
++ * known to respond; a hung ISP CPU is halted by isp_uninit() instead.
++ * Queued buffers stay with the driver and are mapped again on bring-up.
++ */
++static void fthd_hw_teardown(struct fthd_private *dev_priv)
++{
++	if (dev_priv->hw_state == FTHD_HW_DOWN)
++		return;
+ 
++	if (dev_priv->hw_state == FTHD_HW_UP)
++		fthd_stop_firmware(dev_priv);
++
++	dev_priv->hw_state = FTHD_HW_DOWN;
++	fthd_hw_quiesce(dev_priv);
++	/* Descriptors and IOMMU entries live in S2 memory */
++	fthd_v4l2_buffers_unmap(dev_priv);
++	isp_uninit(dev_priv);
++	fthd_hw_deinit(dev_priv);
+ 	fthd_buffer_exit(dev_priv);
++}
+ 
+-	pci_disable_msi(pdev);
++/*
++ * Cut and restore the camera power through the ACPI CMPE method. This is
++ * the only reset that also restarts a hung ISP CPU; the macOS driver does
++ * the same (DisableS2Chip: CMPE(0) + 250 ms, EnableS2Chip: CMPE(1) + 20 ms).
++ * The PCI config space is lost with the power and is restored afterwards.
++ */
++static int fthd_power_cycle(struct fthd_private *dev_priv)
++{
++	struct pci_dev *pdev = dev_priv->pdev;
++	u32 id;
++	int ret;
+ 
+-	if (dev_priv->s2_io)
+-		iounmap(dev_priv->s2_io);
+-	if (dev_priv->s2_mem)
+-		iounmap(dev_priv->s2_mem);
+-	if (dev_priv->isp_io)
+-		iounmap(dev_priv->isp_io);
++	pci_read_config_dword(pdev, PCI_VENDOR_ID, &id);
++	if (id == (PCI_VENDOR_ID_BROADCOM | (pdev->device << 16)))
++		pci_save_state(pdev);
++	else
++		pdev->state_saved = true; /* the copy from the last bring-up */
+ 
+-	pci_release_region(pdev, FTHD_PCI_S2_IO);
+-	pci_release_region(pdev, FTHD_PCI_S2_MEM);
+-	pci_release_region(pdev, FTHD_PCI_ISP_IO);
++	pci_clear_master(pdev);
++
++	ret = isp_acpi_set_power(dev_priv, 0);
++	if (ret)
++		return ret;
++	msleep(250);
++
++	ret = isp_acpi_set_power(dev_priv, 1);
++	if (ret)
++		return ret;
++	msleep(20);
++
++	pci_restore_state(pdev);
++	pci_read_config_dword(pdev, PCI_VENDOR_ID, &id);
++	if (id != (PCI_VENDOR_ID_BROADCOM | (pdev->device << 16))) {
++		dev_err(&pdev->dev,
++			"camera did not return after power cycle (id %08x)\n", id);
++		return -ENODEV;
++	}
++	/* PME_En comes up undefined; the PCI core keeps it off in D0 */
++	pci_pme_active(pdev, false);
++	pci_save_state(pdev);
++
++	return 0;
++}
++
++/*
++ * Restart the camera hardware and resume a running stream. Called with
++ * vb2_queue_lock held.
++ */
++int fthd_hw_restart(struct fthd_private *dev_priv, bool power_cycle)
++{
++	int ret;
++
++	fthd_hw_teardown(dev_priv);
++
++	if (power_cycle) {
++		ret = fthd_power_cycle(dev_priv);
++		if (ret)
++			goto fail;
++	}
++
++	ret = fthd_hw_bringup(dev_priv);
++	if (ret)
++		goto fail;
++
++	ret = fthd_v4l2_buffers_remap(dev_priv);
++	if (ret)
++		goto fail_hw;
++
++	if (dev_priv->streaming) {
++		ret = fthd_v4l2_stream_restart(dev_priv);
++		if (ret)
++			goto fail_hw;
++	}
++	return 0;
++
++fail_hw:
++	/* The firmware did not take the stream; don't ask it to stop */
++	dev_priv->hw_state = FTHD_HW_FAILED;
++	fthd_hw_teardown(dev_priv);
++fail:
++	/* The chip is down now; streaming or recovery may try again */
++	return ret;
++}
++
++static void fthd_recover_work(struct work_struct *work)
++{
++	struct fthd_private *dev_priv =
++		container_of(work, struct fthd_private, recover_work);
++	int attempt, ret = -EIO;
++
++	mutex_lock(&dev_priv->vb2_queue_lock);
++
++	/* Resume brings the hardware up anyway, remove tears it down */
++	if (dev_priv->suspended || dev_priv->removing)
++		goto out;
++
++	for (attempt = 1; attempt <= FTHD_RECOVER_ATTEMPTS; attempt++) {
++		dev_warn(&dev_priv->pdev->dev,
++			 "restarting camera with power cycle (attempt %d of %d)\n",
++			 attempt, FTHD_RECOVER_ATTEMPTS);
++		ret = fthd_hw_restart(dev_priv, true);
++		if (!ret)
++			break;
++		msleep(500 * attempt);
++	}
++
++	dev_priv->recover_count++;
++	if (ret) {
++		dev_err(&dev_priv->pdev->dev,
++			"camera recovery failed (%d); close and reopen to retry\n",
++			ret);
++		fthd_v4l2_buffers_error(dev_priv);
++	} else {
++		dev_info(&dev_priv->pdev->dev, "camera recovered\n");
++	}
++out:
++	mutex_unlock(&dev_priv->vb2_queue_lock);
++}
++
++void fthd_schedule_recovery(struct fthd_private *dev_priv)
++{
++	schedule_work(&dev_priv->recover_work);
++}
++
++static void fthd_pci_remove(struct pci_dev *pdev)
++{
++	struct fthd_private *dev_priv;
++
++	dev_priv = pci_get_drvdata(pdev);
++	if (!dev_priv)
++		goto out;
++
++	mutex_lock(&dev_priv->vb2_queue_lock);
++	dev_priv->removing = true;
++	mutex_unlock(&dev_priv->vb2_queue_lock);
++	cancel_work_sync(&dev_priv->recover_work);
++
++	fthd_debugfs_exit(dev_priv);
++
++	mutex_lock(&dev_priv->vb2_queue_lock);
++	fthd_hw_teardown(dev_priv);
++	mutex_unlock(&dev_priv->vb2_queue_lock);
++
++	fthd_v4l2_unregister(dev_priv);
++
++	pci_set_drvdata(pdev, NULL);
++	fthd_irq_uninstall(dev_priv);
++	pci_disable_msi(pdev);
++	fthd_pci_unmap(dev_priv);
+ 	kfree(dev_priv);
+ out:
+ 	pci_disable_device(pdev);
+@@ -421,35 +655,6 @@ fail_enable:
+ 	return ret;
+ }
+ 
+-static int fthd_firmware_start(struct fthd_private *dev_priv)
+-{
+-	int ret;
+-
+-	ret = fthd_isp_cmd_start(dev_priv);
+-	if (ret)
+-		return ret;
+-
+-	ret = fthd_isp_cmd_print_enable(dev_priv, 1);
+-	if (ret)
+-		return ret;
+-
+-	ret = fthd_isp_cmd_camera_config(dev_priv);
+-	if (ret)
+-		return ret;
+-
+-	ret = fthd_isp_cmd_channel_info(dev_priv);
+-	if (ret)
+-		return ret;
+-
+-	/* Query the sensor's native resolution now so fthd_v4l2_register()
+-	 * can advertise it. Non-fatal: if it fails the V4L2 layer falls back
+-	 * to a default size. */
+-	fthd_isp_cmd_channel_camera_config(dev_priv);
+-
+-	return fthd_isp_cmd_set_loadfile(dev_priv);
+-
+-}
+-
+ static int fthd_pci_probe(struct pci_dev *pdev,
+ 			  const struct pci_device_id *entry)
+ {
+@@ -468,6 +673,7 @@ static int fthd_pci_probe(struct pci_dev *pdev,
+ 	dev_priv->ddr_model = 4;
+ 	dev_priv->ddr_speed = 450;
+ 	dev_priv->frame_rate = FTHD_FRAME_RATE_MAX;
++	dev_priv->hw_state = FTHD_HW_DOWN;
+ 
+ 	spin_lock_init(&dev_priv->io_lock);
+ 	mutex_init(&dev_priv->vb2_queue_lock);
+@@ -476,6 +682,7 @@ static int fthd_pci_probe(struct pci_dev *pdev,
+ 	atomic_set(&dev_priv->users, 0);
+ 	INIT_LIST_HEAD(&dev_priv->buffer_queue);
+ 	INIT_WORK(&dev_priv->irq_work, fthd_irq_work);
++	INIT_WORK(&dev_priv->recover_work, fthd_recover_work);
+ 
+ 	dev_priv->pdev = pdev;
+ 
+@@ -483,21 +690,16 @@ static int fthd_pci_probe(struct pci_dev *pdev,
+ 	if (ret)
+ 		goto fail_work;
+ 
+-	ret = fthd_buffer_init(dev_priv);
+-	if (ret)
+-		goto fail_pci;
+-
+-	ret = fthd_hw_init(dev_priv);
+-	if (ret)
+-		goto fail_buffer;
++	/* Kept for restoring the config space after a power cycle */
++	pci_save_state(pdev);
+ 
+-	ret = fthd_firmware_start(dev_priv);
++	ret = fthd_hw_bringup(dev_priv);
+ 	if (ret)
+-		goto fail_hw;
++		goto fail_pci;
+ 
+ 	ret = fthd_v4l2_register(dev_priv);
+ 	if (ret)
+-		goto fail_firmware;
++		goto fail_hw;
+ 
+ 	ret = fthd_debugfs_init(dev_priv);
+ 	if (ret)
+@@ -505,20 +707,14 @@ static int fthd_pci_probe(struct pci_dev *pdev,
+ 	return 0;
+ fail_v4l2:
+ 	fthd_v4l2_unregister(dev_priv);
+-fail_firmware:
+-	fthd_stop_firmware(dev_priv);
+ fail_hw:
+-	fthd_hw_deinit(dev_priv);
+-fail_buffer:
+-	fthd_buffer_exit(dev_priv);
++	fthd_hw_teardown(dev_priv);
+ fail_pci:
++	pci_set_drvdata(pdev, NULL);
+ 	fthd_irq_uninstall(dev_priv);
+ 	pci_disable_msi(pdev);
+-	pci_release_region(pdev, FTHD_PCI_S2_IO);
+-	pci_release_region(pdev, FTHD_PCI_S2_MEM);
+-	pci_release_region(pdev, FTHD_PCI_ISP_IO);
++	fthd_pci_unmap(dev_priv);
+ 	pci_disable_device(pdev);
+-
+ fail_work:
+ 	cancel_work_sync(&dev_priv->irq_work);
+ 	kfree(dev_priv);
+diff --git a/fthd_drv.h b/fthd_drv.h
+index b874be8..f1f8536 100644
+--- a/fthd_drv.h
++++ b/fthd_drv.h
+@@ -29,6 +29,16 @@
+ 
+ #define FTHD_BUFFERS 8
+ 
++/* Power cycles tried before the camera is declared dead until reopened */
++#define FTHD_RECOVER_ATTEMPTS 3
++
++enum fthd_hw_state {
++	FTHD_HW_DOWN,		/* firmware not running, channels released */
++	FTHD_HW_STARTING,	/* bring-up in progress */
++	FTHD_HW_UP,		/* firmware running */
++	FTHD_HW_FAILED,		/* firmware stopped responding */
++};
++
+ #define FTHD_FRAME_RATE_SCALE 256U
+ #define FTHD_FRAME_RATE_MIN (2 * FTHD_FRAME_RATE_SCALE)
+ #define FTHD_FRAME_RATE_MAX (30 * FTHD_FRAME_RATE_SCALE)
+@@ -129,6 +139,17 @@ struct fthd_private {
+ 	int exposure_auto_priority;
+ 	unsigned int sequence;
+ 	struct dentry *debugfs;
++
++	/* Hardware life cycle; changed only with vb2_queue_lock held */
++	enum fthd_hw_state hw_state;
++	bool suspended;
++	bool streaming;
++	bool removing;
++	unsigned int recover_count;
++	struct work_struct recover_work;
+ };
+ 
++extern int fthd_hw_restart(struct fthd_private *dev_priv, bool power_cycle);
++extern void fthd_schedule_recovery(struct fthd_private *dev_priv);
++
+ #endif
+diff --git a/fthd_isp.c b/fthd_isp.c
+index bc294cf..edc4a97 100644
+--- a/fthd_isp.c
++++ b/fthd_isp.c
+@@ -81,7 +81,7 @@ int isp_mem_destroy(struct isp_mem_obj *obj)
+ 	return 0;
+ }
+ 
+-static int isp_acpi_set_power(struct fthd_private *dev_priv, int power)
++int isp_acpi_set_power(struct fthd_private *dev_priv, int power)
+ {
+ 	acpi_status status;
+ 	acpi_handle handle;
+@@ -290,6 +290,11 @@ static int fthd_isp_cmd(struct fthd_private *dev_priv, enum fthd_isp_cmds comman
+ 	u32 entry;
+ 	int len, ret;
+ 
++	/* The channels only exist while the firmware runs */
++	if (dev_priv->hw_state != FTHD_HW_UP &&
++	    dev_priv->hw_state != FTHD_HW_STARTING)
++		return -EIO;
++
+ 	memset(&cmd, 0, sizeof(cmd));
+ 
+ 	if (response_len) {
+@@ -479,7 +484,7 @@ int isp_powerdown(struct fthd_private *dev_priv)
+ 		reg = FTHD_ISP_REG_READ(0xc3000);
+ 		if (reg == 0x8042006)
+ 			break;
+-		mdelay(10);
++		msleep(10);
+ 	}
+ 
+ 	if (retries >= 100) {
+diff --git a/fthd_isp.h b/fthd_isp.h
+index 7ae74b7..a5da07c 100644
+--- a/fthd_isp.h
++++ b/fthd_isp.h
+@@ -710,6 +710,7 @@ struct fthd_isp_debug_cmd {
+ 
+ extern int isp_init(struct fthd_private *dev_priv);
+ extern int isp_uninit(struct fthd_private *dev_priv);
++extern int isp_acpi_set_power(struct fthd_private *dev_priv, int power);
+ 
+ extern int isp_mem_init(struct fthd_private *dev_priv);
+ extern struct isp_mem_obj *isp_mem_create(struct fthd_private *dev_priv,
+diff --git a/fthd_v4l2.c b/fthd_v4l2.c
+index c971a29..acf8a87 100644
+--- a/fthd_v4l2.c
++++ b/fthd_v4l2.c
+@@ -135,30 +135,93 @@ static int fthd_buffer_queue_setup(
+ 	return 0;
+ }
+ 
++static struct h2t_buf_ctx *fthd_find_ctx(struct fthd_private *dev_priv,
++					  struct vb2_buffer *vb)
++{
++	int i;
++
++	for (i = 0; i < FTHD_BUFFERS; i++) {
++		if (dev_priv->h2t_bufs[i].vb == vb)
++			return dev_priv->h2t_bufs + i;
++	}
++	return NULL;
++}
++
++/* Release the S2 side of a buffer: its descriptor and IOMMU mappings. */
++static void fthd_ctx_unmap(struct fthd_private *dev_priv, struct h2t_buf_ctx *ctx)
++{
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(ctx->plane); i++) {
++		iommu_free(dev_priv, ctx->plane[i]);
++		ctx->plane[i] = NULL;
++	}
++	isp_mem_destroy(ctx->dma_desc_obj);
++	ctx->dma_desc_obj = NULL;
++}
++
++static void fthd_ctx_fill_desc(struct fthd_private *dev_priv, struct h2t_buf_ctx *ctx)
++{
++	struct dma_descriptor_list *dma_list = &ctx->dma_desc_list;
++
++	memset(dma_list, 0, 0x180);
++
++	dma_list->field0 = 1;
++	dma_list->count = 1;
++	dma_list->desc[0].count = 1;
++	dma_list->desc[0].pool = 0x02;
++	dma_list->desc[0].addr0 = ((ctx->plane[0]->offset << 12) | 0xc0000000) +
++		ctx->plane[0]->byte_offset;
++
++	if (dev_priv->fmt.planes >= 2)
++		dma_list->desc[0].addr1 = ((ctx->plane[1]->offset << 12) | 0xc0000000) +
++		ctx->plane[1]->byte_offset;
++	if (dev_priv->fmt.planes >= 3)
++		dma_list->desc[0].addr2 = ((ctx->plane[2]->offset << 12) | 0xc0000000) +
++		ctx->plane[2]->byte_offset;
++
++	dma_list->desc[0].tag = (u64)ctx;
++}
++
++/* Map a buffer into S2 memory. Needs a running chip. */
++static int fthd_ctx_map(struct fthd_private *dev_priv, struct h2t_buf_ctx *ctx)
++{
++	struct sg_table *sgtable;
++	int i;
++
++	if (!dev_priv->mem || !dev_priv->iommu)
++		return -EIO;
++
++	ctx->dma_desc_obj = isp_mem_create(dev_priv, FTHD_MEM_BUFFER, 0x180);
++	if (!ctx->dma_desc_obj)
++		return -ENOMEM;
++
++	for (i = 0; i < dev_priv->fmt.planes; i++) {
++		sgtable = vb2_dma_sg_plane_desc(ctx->vb, i);
++		ctx->plane[i] = iommu_allocate_sgtable(dev_priv, sgtable);
++		if (!ctx->plane[i]) {
++			fthd_ctx_unmap(dev_priv, ctx);
++			return -ENOMEM;
++		}
++	}
++
++	fthd_ctx_fill_desc(dev_priv, ctx);
++	return 0;
++}
++
+ static void fthd_buffer_cleanup(struct vb2_buffer *vb)
+ {
+ 	struct fthd_private *dev_priv = vb2_get_drv_priv(vb->vb2_queue);
+-	struct h2t_buf_ctx *ctx = NULL;
+-	int i;
++	struct h2t_buf_ctx *ctx;
+ 
+ 	pr_debug("%p\n", vb);
+-	for(i = 0; i < FTHD_BUFFERS; i++) {
+-		if (dev_priv->h2t_bufs[i].vb == vb) {
+-			ctx = dev_priv->h2t_bufs + i;
+-			break;
+-		};
+-	}
++	ctx = fthd_find_ctx(dev_priv, vb);
+ 	if (!ctx || ctx->state == BUF_FREE)
+ 		return;
+ 
++	fthd_ctx_unmap(dev_priv, ctx);
+ 	ctx->state = BUF_FREE;
+ 	ctx->vb = NULL;
+-	isp_mem_destroy(ctx->dma_desc_obj);
+-	for(i = 0; i < dev_priv->fmt.planes; i++) {
+-		iommu_free(dev_priv, ctx->plane[i]);
+-		ctx->plane[i] = NULL;
+-	}
+-	ctx->dma_desc_obj = NULL;
+ }
+ 
+ static int fthd_send_h2t_buffer(struct fthd_private *dev_priv, struct h2t_buf_ctx *ctx)
+@@ -182,48 +245,44 @@ static void fthd_buffer_queue(struct vb2_buffer *vb)
+ {
+ 	struct fthd_private *dev_priv = vb2_get_drv_priv(vb->vb2_queue);
+ 	struct dma_descriptor_list *list;
+-	struct h2t_buf_ctx *ctx = NULL;
++	struct h2t_buf_ctx *ctx;
+ 
+-	int i;
+ 	pr_debug("vb = %p\n", vb);
+-	for(i = 0; i < FTHD_BUFFERS; i++) {
+-		if (dev_priv->h2t_bufs[i].vb == vb) {
+-			ctx = dev_priv->h2t_bufs + i;
+-			break;
+-		};
+-	}
+-
++	ctx = fthd_find_ctx(dev_priv, vb);
+ 	if (!ctx)
+ 		return;
+ 
+ 	if (ctx->state != BUF_ALLOC)
+ 		return;
+ 
+-	if (!vb->vb2_queue->streaming) {
++	/*
++	 * Without a running channel the buffer waits in the driver; starting
++	 * or restarting the stream hands it to the firmware.
++	 */
++	if (!dev_priv->streaming || dev_priv->hw_state != FTHD_HW_UP ||
++	    !ctx->dma_desc_obj) {
+ 		ctx->state = BUF_DRV_QUEUED;
+-	} else {
+-		list = &ctx->dma_desc_list;
+-		list->field0 = 1;
+-		ctx->state = BUF_HW_QUEUED;
+-		wmb();
+-		pr_debug("%d: field0: %d, count %d, pool %d, addr0 0x%08x, addr1 0x%08x tag 0x%08llx vb = %p\n", i, list->field0,
+-			 list->desc[0].count, list->desc[0].pool, list->desc[0].addr0, list->desc[0].addr1, list->desc[0].tag, ctx->vb);
++		return;
++	}
+ 
+-		if (fthd_send_h2t_buffer(dev_priv, ctx)) {
+-			vb2_buffer_done(vb, VB2_BUF_STATE_ERROR);
+-			ctx->state = BUF_ALLOC;
+-		}
++	list = &ctx->dma_desc_list;
++	list->field0 = 1;
++	ctx->state = BUF_HW_QUEUED;
++	wmb();
++	pr_debug("field0: %d, count %d, pool %d, addr0 0x%08x, addr1 0x%08x tag 0x%08llx vb = %p\n", list->field0,
++		 list->desc[0].count, list->desc[0].pool, list->desc[0].addr0, list->desc[0].addr1, list->desc[0].tag, ctx->vb);
++
++	if (fthd_send_h2t_buffer(dev_priv, ctx)) {
++		ctx->state = BUF_ALLOC;
++		vb2_buffer_done(vb, VB2_BUF_STATE_ERROR);
+ 	}
+-	return;
+ }
+ 
+ static int fthd_buffer_prepare(struct vb2_buffer *vb)
+ {
+ 	struct fthd_private *dev_priv = vb2_get_drv_priv(vb->vb2_queue);
+-	struct sg_table *sgtable;
+ 	struct h2t_buf_ctx *ctx = NULL;
+-	struct dma_descriptor_list *dma_list;
+-	int i;
++	int i, ret;
+ 
+ 	pr_debug("%p\n", vb);
+ 	for(i = 0; i < FTHD_BUFFERS; i++) {
+@@ -239,54 +298,36 @@ static int fthd_buffer_prepare(struct vb2_buffer *vb)
+ 
+ 	if (ctx->state == BUF_FREE) {
+ 		pr_debug("allocating new entry\n");
+-		ctx->dma_desc_obj = isp_mem_create(dev_priv, FTHD_MEM_BUFFER, 0x180);
+-		if (!ctx->dma_desc_obj)
+-			return -ENOMEM;
+-
+ 		ctx->vb = vb;
+ 		ctx->state = BUF_ALLOC;
++		init_waitqueue_head(&ctx->wq);
++	}
+ 
+-		for(i = 0; i < dev_priv->fmt.planes; i++) {
+-		  sgtable = vb2_dma_sg_plane_desc(vb, i);
+-		  ctx->plane[i] = iommu_allocate_sgtable(dev_priv, sgtable);
+-		  if(!ctx->plane[i])
+-			  goto err_free;
++	/* A buffer prepared while the chip is down is mapped on bring-up */
++	if (!ctx->dma_desc_obj && dev_priv->hw_state == FTHD_HW_UP) {
++		ret = fthd_ctx_map(dev_priv, ctx);
++		if (ret) {
++			ctx->vb = NULL;
++			ctx->state = BUF_FREE;
++			return ret;
+ 		}
++	} else if (ctx->dma_desc_obj) {
++		fthd_ctx_fill_desc(dev_priv, ctx);
+ 	}
+ 
+ 	vb2_set_plane_payload(vb, 0, dev_priv->fmt.fmt.sizeimage);
+-
+-	dma_list = &ctx->dma_desc_list;
+-	memset(dma_list, 0, 0x180);
+-
+-	dma_list->field0 = 1;
+-	dma_list->count = 1;
+-	dma_list->desc[0].count = 1;
+-	dma_list->desc[0].pool = 0x02;
+-	dma_list->desc[0].addr0 = ((ctx->plane[0]->offset << 12) | 0xc0000000) +
+-		ctx->plane[0]->byte_offset;
+-
+-	if (dev_priv->fmt.planes >= 2)
+-		dma_list->desc[0].addr1 = ((ctx->plane[1]->offset << 12) | 0xc0000000) +
+-		ctx->plane[1]->byte_offset;
+-	if (dev_priv->fmt.planes >= 3)
+-		dma_list->desc[0].addr2 = ((ctx->plane[2]->offset << 12) | 0xc0000000) +
+-		ctx->plane[2]->byte_offset;
+-
+-	dma_list->desc[0].tag = (u64)ctx;
+-	init_waitqueue_head(&ctx->wq);
+ 	return 0;
++}
+ 
+-err_free:
+-	for(i = 0; i < dev_priv->fmt.planes; i++) {
+-		iommu_free(dev_priv, ctx->plane[i]);
+-		ctx->plane[i] = NULL;
++static struct h2t_buf_ctx *fthd_tag_to_ctx(struct fthd_private *dev_priv, u64 tag)
++{
++	int i;
++
++	for (i = 0; i < FTHD_BUFFERS; i++) {
++		if (tag == (u64)(dev_priv->h2t_bufs + i))
++			return dev_priv->h2t_bufs + i;
+ 	}
+-	isp_mem_destroy(ctx->dma_desc_obj);
+-	ctx->dma_desc_obj = NULL;
+-	ctx->vb = NULL;
+-	ctx->state = BUF_FREE;
+-	return -ENOMEM;
++	return NULL;
+ }
+ 
+ void fthd_buffer_return_handler(struct fthd_private *dev_priv, u32 offset, int size)
+@@ -297,8 +338,21 @@ void fthd_buffer_return_handler(struct fthd_private *dev_priv, u32 offset, int s
+ 
+ 	FTHD_S2_MEMCPY_FROMIO(&list, offset, sizeof(list));
+ 
++	if (list.count > ARRAY_SIZE(list.desc)) {
++		dev_err_ratelimited(&dev_priv->pdev->dev,
++				    "invalid buffer return count %u\n", list.count);
++		return;
++	}
++
+ 	for(i = 0; i < list.count; i++) {
+-		ctx = (struct h2t_buf_ctx *)list.desc[i].tag;
++		/* The tag comes back from chip memory; only trust our own */
++		ctx = fthd_tag_to_ctx(dev_priv, list.desc[i].tag);
++		if (!ctx) {
++			dev_err_ratelimited(&dev_priv->pdev->dev,
++					    "invalid buffer tag %llx\n",
++					    list.desc[i].tag);
++			continue;
++		}
+ 		pr_debug("%d: field0: %d, count %d, pool %d, addr0 0x%08x, addr1 0x%08x tag 0x%08llx vb = %p, ctx = %p\n", i, list.field0,
+ 			 list.desc[i].count, list.desc[i].pool, list.desc[i].addr0, list.desc[i].addr1, list.desc[i].tag, ctx->vb, ctx);
+ 
+@@ -316,62 +370,139 @@ void fthd_buffer_return_handler(struct fthd_private *dev_priv, u32 offset, int s
+ 	}
+ }
+ 
+-static int fthd_start_streaming(struct vb2_queue *vq, unsigned int count)
++/*
++ * Start the firmware channel and hand it every buffer held by the driver.
++ * Called with vb2_queue_lock held.
++ */
++int fthd_v4l2_stream_restart(struct fthd_private *dev_priv)
+ {
+-	struct fthd_private *dev_priv = vb2_get_drv_priv(vq);
+ 	struct h2t_buf_ctx *ctx;
+ 	int i, ret;
+ 
+-	pr_debug("count = %d\n", count);
+-	dev_priv->sequence = 0;
+-
+ 	ret = fthd_start_channel(dev_priv, 0);
+-	if (ret) {
+-		/* vb2 owns the buffers again if the queue never starts. */
+-		for (i = 0; i < FTHD_BUFFERS; i++) {
+-			ctx = dev_priv->h2t_bufs + i;
+-			if (ctx->state != BUF_DRV_QUEUED)
+-				continue;
+-			vb2_buffer_done(ctx->vb, VB2_BUF_STATE_QUEUED);
+-			ctx->state = BUF_ALLOC;
+-		}
++	if (ret)
+ 		return ret;
+-	}
+ 
+ 	/* Starting the channel resets the ISP, so push the control values down. */
+-	v4l2_ctrl_handler_setup(&dev_priv->v4l2_ctrl_handler);
++	__v4l2_ctrl_handler_setup(&dev_priv->v4l2_ctrl_handler);
+ 
+ 	for(i = 0; i < FTHD_BUFFERS; i++) {
+ 		ctx = dev_priv->h2t_bufs + i;
+ 		if (ctx->state != BUF_DRV_QUEUED)
+ 			continue;
+ 
++		ctx->state = BUF_HW_QUEUED;
+ 		if (fthd_send_h2t_buffer(dev_priv, ctx)) {
+-			vb2_buffer_done(ctx->vb, VB2_BUF_STATE_ERROR);
+ 			ctx->state = BUF_ALLOC;
+-			continue;
++			vb2_buffer_done(ctx->vb, VB2_BUF_STATE_ERROR);
+ 		}
+-		ctx->state = BUF_HW_QUEUED;
+ 	}
+ 	return 0;
+ }
+ 
++/* The chip is going down; its S2 memory and IOMMU go with it. */
++void fthd_v4l2_buffers_unmap(struct fthd_private *dev_priv)
++{
++	struct h2t_buf_ctx *ctx;
++	int i;
++
++	for (i = 0; i < FTHD_BUFFERS; i++) {
++		ctx = dev_priv->h2t_bufs + i;
++		if (ctx->state == BUF_FREE)
++			continue;
++		/* The firmware forgets it, the driver sends it again */
++		if (ctx->state == BUF_HW_QUEUED)
++			ctx->state = BUF_DRV_QUEUED;
++		fthd_ctx_unmap(dev_priv, ctx);
++	}
++}
++
++int fthd_v4l2_buffers_remap(struct fthd_private *dev_priv)
++{
++	struct h2t_buf_ctx *ctx;
++	int i, ret;
++
++	for (i = 0; i < FTHD_BUFFERS; i++) {
++		ctx = dev_priv->h2t_bufs + i;
++		if (ctx->state == BUF_FREE || ctx->dma_desc_obj)
++			continue;
++		ret = fthd_ctx_map(dev_priv, ctx);
++		if (ret)
++			return ret;
++	}
++	return 0;
++}
++
++/* Give every buffer back to userspace and fail the queue. */
++void fthd_v4l2_buffers_error(struct fthd_private *dev_priv)
++{
++	struct h2t_buf_ctx *ctx;
++	int i;
++
++	for (i = 0; i < FTHD_BUFFERS; i++) {
++		ctx = dev_priv->h2t_bufs + i;
++		if (ctx->state != BUF_DRV_QUEUED && ctx->state != BUF_HW_QUEUED)
++			continue;
++		ctx->state = BUF_ALLOC;
++		vb2_buffer_done(ctx->vb, VB2_BUF_STATE_ERROR);
++	}
++	vb2_queue_error(&dev_priv->vb2_queue);
++}
++
++static void fthd_return_drv_buffers(struct fthd_private *dev_priv,
++				    enum vb2_buffer_state state)
++{
++	struct h2t_buf_ctx *ctx;
++	int i;
++
++	for (i = 0; i < FTHD_BUFFERS; i++) {
++		ctx = dev_priv->h2t_bufs + i;
++		if (ctx->state != BUF_DRV_QUEUED)
++			continue;
++		ctx->state = BUF_ALLOC;
++		vb2_buffer_done(ctx->vb, state);
++	}
++}
++
++static int fthd_start_streaming(struct vb2_queue *vq, unsigned int count)
++{
++	struct fthd_private *dev_priv = vb2_get_drv_priv(vq);
++	int ret;
++
++	pr_debug("count = %d\n", count);
++	dev_priv->sequence = 0;
++
++	/* A failed recovery or suspend left the chip down; try once more */
++	if (dev_priv->hw_state != FTHD_HW_UP) {
++		ret = fthd_hw_restart(dev_priv, true);
++		if (ret)
++			goto fail;
++	}
++
++	ret = fthd_v4l2_stream_restart(dev_priv);
++	if (ret)
++		goto fail;
++
++	dev_priv->streaming = true;
++	return 0;
++
++fail:
++	/* vb2 owns the buffers again if the queue never starts. */
++	fthd_return_drv_buffers(dev_priv, VB2_BUF_STATE_QUEUED);
++	return ret;
++}
++
+ static void fthd_stop_streaming(struct vb2_queue *vq)
+ {
+ 	struct fthd_private *dev_priv = vb2_get_drv_priv(vq);
+ 	struct h2t_buf_ctx *ctx;
+ 	int ret, i;
+ 
++	dev_priv->streaming = false;
+ 	ret = fthd_stop_channel(dev_priv, 0);
+ 
+ 	/* Buffers never sent to the firmware will not come back from it */
+-	for(i = 0; i < FTHD_BUFFERS; i++) {
+-		ctx = dev_priv->h2t_bufs + i;
+-		if (ctx->state == BUF_DRV_QUEUED) {
+-			ctx->state = BUF_ALLOC;
+-			vb2_buffer_done(ctx->vb, VB2_BUF_STATE_ERROR);
+-		}
+-	}
++	fthd_return_drv_buffers(dev_priv, VB2_BUF_STATE_ERROR);
+ 
+ 	if (!ret) {
+ 		pr_debug("waiting for buffers...\n");
+@@ -791,7 +922,11 @@ static int fthd_s_ctrl(struct v4l2_ctrl *ctrl)
+ 	struct fthd_private *dev_priv = container_of(ctrl->handler, struct fthd_private, v4l2_ctrl_handler);
+ 	int ret = -EINVAL;
+ 
+-	pr_info("id = %x, val = %d\n", ctrl->id, ctrl->val);
++	pr_debug("id = %x, val = %d\n", ctrl->id, ctrl->val);
++
++	/* Stored values are sent to the firmware when the channel starts */
++	if (dev_priv->hw_state != FTHD_HW_UP)
++		return 0;
+ 
+ 	switch(ctrl->id) {
+ 	case V4L2_CID_CONTRAST:
+@@ -872,6 +1007,8 @@ int fthd_v4l2_register(struct fthd_private *dev_priv)
+ 		goto fail;
+ 
+ 	v4l2_ctrl_handler_init(&dev_priv->v4l2_ctrl_handler, 7);
++	/* Controls talk to the firmware, which recovery may restart */
++	dev_priv->v4l2_ctrl_handler.lock = &dev_priv->vb2_queue_lock;
+ 	v4l2_ctrl_new_std(&dev_priv->v4l2_ctrl_handler, &fthd_ctrl_ops,
+ 			  V4L2_CID_BRIGHTNESS, 0, 0xff, 1, 0x80);
+ 	v4l2_ctrl_new_std(&dev_priv->v4l2_ctrl_handler, &fthd_ctrl_ops,
+diff --git a/fthd_v4l2.h b/fthd_v4l2.h
+index 8e4f9d5..001f9ca 100644
+--- a/fthd_v4l2.h
++++ b/fthd_v4l2.h
+@@ -30,5 +30,9 @@ struct fthd_fmt {
+ struct fthd_private;
+ extern int fthd_v4l2_register(struct fthd_private *dev_priv);
+ extern void fthd_v4l2_unregister(struct fthd_private *dev_priv);
++extern void fthd_v4l2_buffers_unmap(struct fthd_private *dev_priv);
++extern int fthd_v4l2_buffers_remap(struct fthd_private *dev_priv);
++extern int fthd_v4l2_stream_restart(struct fthd_private *dev_priv);
++extern void fthd_v4l2_buffers_error(struct fthd_private *dev_priv);
+ 
+ #endif
+-- 
+2.56.0
+

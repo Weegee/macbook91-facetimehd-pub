@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Maintainer: Weegee <748975+Weegee@users.noreply.github.com>
+#
+# FaceTime HD camera (Broadcom 14e4:1570) on the Apple MacBook9,1 (A1534):
+# the facetimehd driver with this project's patches as a DKMS module. The
+# Apple firmware it needs is not part of the package: the user downloads it
+# from Apple with macbook91-facetimehd-fetch-firmware, on their own
+# responsibility (see the install message, README.md and docs/FIRMWARE.md).
+
+pkgbase=macbook91-facetimehd
+pkgname=(macbook91-facetimehd-dkms)
+pkgver=20261021.01
+pkgrel=1
+pkgdesc="FaceTime HD camera driver for Apple MacBook9,1 (A1534) with suspend and hang recovery"
+arch=('x86_64')
+url='https://github.com/Weegee/macbook91-facetimehd-pub'
+# The driver and its patches are GPL-2.0-only, the module's Kbuild, Makefile
+# and dkms.conf GPL-2.0-or-later, the verify tool and the README
+# GPL-3.0-or-later, the firmware fetch script GPL-2.0-only.
+license=('GPL-2.0-only' 'GPL-2.0-or-later' 'GPL-3.0-or-later')
+
+# make, for package(). The module itself is built by DKMS on the target
+# machine.
+makedepends=('make')
+
+# One source: the reproducible tarball `make dist` writes to dist/. It holds
+# the assembled driver tree (upstream commit + patches, both pinned in
+# packaging/upstream.lock) and no Apple data. The checksum is pinned at
+# release time; `make arch-pkg` refuses a tarball that does not match it.
+source=("$pkgbase-$pkgver.tar")
+sha256sums=('3390f71d197d2563bd03ccef4354100671c677bad4ff6d5829a40ed86bc640a5')
+
+package_macbook91-facetimehd-dkms() {
+    pkgdesc="FaceTime HD camera driver for Apple MacBook9,1 (A1534) with suspend and hang recovery (DKMS)"
+    depends=('dkms')
+    optdepends=('linux-cachyos-headers: build against the CachyOS kernel'
+                'linux-cachyos-lts-headers: build against the CachyOS LTS kernel'
+                'linux-headers: build against the Arch kernel'
+                'linux-lts-headers: build against the Arch LTS kernel'
+                'clang: required by kernels built with clang, e.g. linux-cachyos'
+                'lld: required by kernels built with clang'
+                'llvm: required by kernels built with clang'
+                'v4l-utils: lets macbook91-facetimehd-verify capture test frames')
+    # Upstream facetimehd binds the same PCI ID under another module name.
+    conflicts=('facetimehd-dkms' 'facetimehd-dkms-git' 'bcwc-pcie-git')
+    install="$pkgbase-dkms.install"
+
+    cd "$pkgbase-$pkgver" || exit 1
+    make PREFIX=/usr DESTDIR="$pkgdir" install
+}

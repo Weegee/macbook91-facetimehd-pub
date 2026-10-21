@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# macbook91-facetimehd-verify: one check of the MacBook9,1 FaceTime HD camera
+# after installing or updating macbook91-facetimehd-dkms.
+#
+# Read-only and unprivileged: it changes no setting, loads or unloads nothing
+# and keeps no recording. It captures a few frames to /dev/null when v4l-utils
+# is installed. Returns a single PASS/FAIL (exit 0/1).
+#
+# usage: macbook91-facetimehd-verify [--no-capture]
+#
+set -u
+# NOTE: deliberately no pipefail; checks below use `producer | grep -q`, and
+# grep -q exiting early would turn a match into a failure (macbook91-cs4208
+# learned this the hard way).
+
+PKG=macbook91-facetimehd
+MOD=macbook91_facetimehd
+PCI_ID="14e4:1570"
+DMI_WANT="MacBook9,1"
+FWDIR=/usr/lib/firmware/facetimehd
+# Pinned like tools/macbook91-facetimehd-fetch-firmware.
+FW_SUMS="
+240ef2e991f1d089d8228ce11d92b66bfa4b3d7289ec4fee228b64a713024330 firmware.bin
+b7a38aef2755721bb28c92d84a15654b17e9fb3b0a0f088a384a981fc8fe16d6 1675_01XX.dat
+"
+
+capture=1
+case "${1:-}" in
+	--no-capture) capture=0 ;;
+	-h|--help) sed -n '3,11p' "$0"; exit 0 ;;
+	"") ;;
+	*) echo "unknown option: $1" >&2; exit 2 ;;
+esac
+
+fails=0 warns=0
+pass() { printf '  PASS  %s\n' "$*"; }
+fail() { printf '  FAIL  %s\n' "$*"; fails=$((fails + 1)); }
+warn() { printf '  WARN  %s\n' "$*"; warns=$((warns + 1)); }
+info() { printf '  ....  %s\n' "$*"; }
+
+echo "$PKG verify ($(uname -r))"
+
+# 1. Machine
+dmi=$(cat /sys/class/dmi/id/product_name 2>/dev/null)
+[ "$dmi" = "$DMI_WANT" ] && pass "machine is $dmi" || warn "machine is '${dmi:-unknown}', not $DMI_WANT"
+
+# 2. Packages
+ver=""
+if command -v pacman >/dev/null 2>&1; then
+	ver=$(pacman -Q "$PKG-dkms" 2>/dev/null | awk '{print $2}')
+	[ -n "$ver" ] && pass "$PKG-dkms $ver installed" || fail "$PKG-dkms is not installed"
+	ver=${ver%-*}
+fi
+
+# 3. Firmware
+fwbad=""
+while read -r sum name; do
+	[ -n "$name" ] || continue
+	if [ ! -r "$FWDIR/$name" ]; then
+		fwbad="$fwbad $name(missing)"
+	elif [ "$(sha256sum "$FWDIR/$name" | cut -d' ' -f1)" != "$sum" ]; then
+		fwbad="$fwbad $name(modified)"
+	fi
+done <<< "$FW_SUMS"
+[ -z "$fwbad" ] && pass "firmware 5.60.0 and set file 1675 match their pinned SHA256" \
+	|| fail "firmware in $FWDIR:$fwbad (download it: sudo macbook91-facetimehd-fetch-firmware)"
+
+# 4. DKMS
+if command -v dkms >/dev/null 2>&1; then
+	st=$(dkms status "$PKG" -k "$(uname -r)" 2>/dev/null)
+	case "$st" in
+		*installed*) pass "DKMS: $st" ;;
+		"") fail "DKMS has no build of $PKG for $(uname -r)" ;;
+		*) fail "DKMS: $st" ;;
+	esac
+else
+	fail "dkms is not installed"
+fi
+
+# 5. Device and driver
+dev=""
+for d in /sys/bus/pci/devices/*; do
+	[ "$(cat "$d/vendor" 2>/dev/null):$(cat "$d/device" 2>/dev/null)" = "0x${PCI_ID%%:*}:0x${PCI_ID##*:}" ] && { dev=$d; break; }
+done
+if [ -z "$dev" ]; then
+	fail "no PCI device $PCI_ID found"
+else
+	drv=$(basename "$(readlink "$dev/driver" 2>/dev/null)" 2>/dev/null)
+	[ "$drv" = "$MOD" ] && pass "$(basename "$dev") is bound to $MOD" || fail "$(basename "$dev") is bound to '${drv:-nothing}', not $MOD"
+fi
+[ -d /sys/module/facetimehd ] && fail "upstream module facetimehd is loaded as well; remove it"
+
+# 6. The loaded module comes from the installed source
+if [ -d /sys/module/$MOD ]; then
+	have=$(cat /sys/module/$MOD/version 2>/dev/null)
+	if [ -n "$ver" ] && [ -d "/usr/src/$PKG-$ver" ]; then
+		id=$(printf '%s\n' "/usr/src/$PKG-$ver"/fthd_*.c "/usr/src/$PKG-$ver"/fthd_*.h | LC_ALL=C sort | xargs cat | sha256sum | cut -c1-16)
+		want="$ver+$id"
+		[ "$have" = "$want" ] && pass "loaded module is $have (= /usr/src/$PKG-$ver)" \
+			|| fail "loaded module reports '${have:-no version}', installed source is $want (reboot or reload)"
+	else
+		info "loaded module reports '${have:-no version}'"
+	fi
+else
+	fail "module $MOD is not loaded (sudo modprobe $PKG)"
+fi
+
+# 7. Capture and idle power-off
+vdev=""
+for v in /sys/class/video4linux/video*; do
+	[ -n "$dev" ] && [ "$(readlink -f "$v/device")" = "$(readlink -f "$dev")" ] && { vdev=/dev/$(basename "$v"); break; }
+done
+if [ -z "$vdev" ]; then
+	fail "no video device for the camera"
+elif [ "$capture" = 0 ]; then
+	info "capture skipped (--no-capture)"
+elif ! command -v v4l2-ctl >/dev/null 2>&1; then
+	warn "v4l-utils not installed; capture not checked"
+else
+	t0=$(date +%s%N)
+	out=$(timeout 30 v4l2-ctl -d "$vdev" --stream-mmap --stream-count=60 --stream-to=/dev/null --verbose 2>&1)
+	rc=$? ms=$(( ($(date +%s%N) - t0) / 1000000 ))
+	n=$(printf '%s\n' "$out" | grep -c 'seq:')
+	if [ "$rc" = 0 ] && [ "$n" = 60 ]; then
+		pass "captured 60 frames from $vdev in $ms ms"
+	elif printf '%s' "$out" | grep -q 'Device or resource busy'; then
+		warn "$vdev is in use by another program; capture not checked"
+		capture=0
+	else
+		fail "capture from $vdev: rc=$rc, $n of 60 frames"
+	fi
+	idle=$(cat /sys/module/$MOD/parameters/idle_poweroff_ms 2>/dev/null)
+	if [ "$capture" = 1 ] && [ -n "$idle" ] && [ "$idle" -ge 0 ] 2>/dev/null; then
+		if [ "$idle" -gt 30000 ]; then
+			# Do not keep the user waiting for a long, deliberately chosen delay.
+			info "idle power-off not checked (idle_poweroff_ms=$idle is over 30 s)"
+		else
+			# A powered-off chip answers config reads with all ones.
+			sleep $(( idle / 1000 + 2 ))
+			vid=$(od -An -tx2 -N2 "$dev/config" 2>/dev/null | tr -d ' ')
+			[ "$vid" = ffff ] && pass "camera powered off after ${idle} ms idle" \
+				|| warn "camera still powered ${idle} ms after the stream (in use elsewhere?)"
+		fi
+	fi
+fi
+
+# 8. Kernel log of this boot
+if log=$(journalctl -k -b -o cat 2>/dev/null); then
+	bad=$(printf '%s\n' "$log" | grep -E "^$MOD " | grep -ciE 'error|fail|timeout|not responding')
+	oops=$(printf '%s\n' "$log" | grep -A3 -E 'WARNING:|BUG:' | grep -c "$MOD")
+	# The kernel names the module in brackets, e.g. a deprecated workqueue (7.2)
+	wq=$(printf '%s\n' "$log" | grep -cE "^workqueue: .*\[$MOD\]")
+	[ "$bad" = 0 ] && [ "$oops" = 0 ] && [ "$wq" = 0 ] && pass "kernel log: no $MOD errors this boot" \
+		|| warn "kernel log: $bad error lines, $oops warnings, $wq workqueue warnings naming $MOD (journalctl -k -b | grep $MOD)"
+else
+	info "kernel log not readable for this user"
+fi
+
+echo
+if [ "$fails" = 0 ]; then
+	echo "PASS ($warns warnings)"
+	exit 0
+fi
+echo "FAIL ($fails failed, $warns warnings)"
+exit 1

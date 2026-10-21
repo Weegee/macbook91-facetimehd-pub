@@ -1,0 +1,240 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weegee <748975+Weegee@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 13:12:28 +0200
+Subject: [PATCH 10/11] drv: power the camera off while no stream runs
+
+The driver disables ASPM on the camera link because the chip hangs while
+streaming otherwise. A link without ASPM keeps the CPU package out of
+PC6: measured on a MacBook9,1 with the module loaded and the camera
+closed, the package draws about 0.4 W more than with the chip powered
+off.
+
+Power the chip off through ACPI CMPE once it has been idle for
+idle_poweroff_ms (default 5000, -1 keeps it on). The next stream start
+powers it on again through the existing restart path, which costs about
+0.7 s before the first frame. Recovery without a stream now just powers
+the chip off. System suspend and remove first give a powered off chip
+its power and config space back, so the PCI core and a later probe find
+the device as before.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ fthd_drv.c  | 77 ++++++++++++++++++++++++++++++++++++++++++++++++++---
+ fthd_drv.h  |  2 ++
+ fthd_v4l2.c |  6 ++++-
+ 3 files changed, 81 insertions(+), 4 deletions(-)
+
+diff --git a/fthd_drv.c b/fthd_drv.c
+index a4a8f06..b5431f3 100644
+--- a/fthd_drv.c
++++ b/fthd_drv.c
+@@ -443,6 +443,16 @@ static void fthd_hw_teardown(struct fthd_private *dev_priv)
+ 	fthd_buffer_exit(dev_priv);
+ }
+ 
++/*
++ * While the chip has power the driver keeps ASPM off on its link, which
++ * holds the CPU package in PC3; without power the link is down and the
++ * package may go deeper.
++ */
++static int idle_poweroff_ms = 5000;
++module_param(idle_poweroff_ms, int, 0644);
++MODULE_PARM_DESC(idle_poweroff_ms,
++		 "Power the camera off after this many ms without a stream (-1: never)");
++
+ /* Camera power timing of the macOS driver (DisableS2Chip, EnableS2Chip) */
+ #define FTHD_POWER_OFF_MS	250
+ #define FTHD_POWER_ON_MS	20
+@@ -512,6 +522,24 @@ static int fthd_power_cycle(struct fthd_private *dev_priv)
+ 	return 0;
+ }
+ 
++/* Take the chip down and cut its power. Called with vb2_queue_lock held. */
++static void fthd_hw_power_down(struct fthd_private *dev_priv)
++{
++	fthd_hw_teardown(dev_priv);
++	if (!dev_priv->powered_off)
++		fthd_power_off(dev_priv);
++}
++
++/*
++ * Give a powered off chip its power and config space back, so that system
++ * sleep and a later probe find it as the PCI core left it.
++ */
++static void fthd_power_restore(struct fthd_private *dev_priv)
++{
++	if (dev_priv->powered_off && fthd_power_cycle(dev_priv))
++		dev_err(&dev_priv->pdev->dev, "failed to power the camera on\n");
++}
++
+ /*
+  * Restart the camera hardware and resume a running stream. Called with
+  * vb2_queue_lock held.
+@@ -571,6 +599,13 @@ static void fthd_recover_work(struct work_struct *work)
+ 	if (dev_priv->suspended || dev_priv->removing)
+ 		goto out;
+ 
++	/* Without a stream the chip only needs power again for the next one */
++	if (!dev_priv->streaming && !dev_priv->force_recover &&
++	    READ_ONCE(idle_poweroff_ms) >= 0) {
++		fthd_hw_power_down(dev_priv);
++		goto out;
++	}
++
+ 	/* A stream start may have restarted the chip already */
+ 	if (dev_priv->hw_state == FTHD_HW_UP && !dev_priv->force_recover)
+ 		goto out;
+@@ -598,6 +633,7 @@ static void fthd_recover_work(struct work_struct *work)
+ 	} else if (!resuming) {
+ 		dev_info(&dev_priv->pdev->dev, "camera recovered\n");
+ 	}
++	fthd_schedule_idle(dev_priv);
+ out:
+ 	mutex_unlock(&dev_priv->vb2_queue_lock);
+ }
+@@ -607,6 +643,29 @@ void fthd_schedule_recovery(struct fthd_private *dev_priv)
+ 	schedule_work(&dev_priv->recover_work);
+ }
+ 
++static void fthd_idle_work(struct work_struct *work)
++{
++	struct fthd_private *dev_priv =
++		container_of(to_delayed_work(work), struct fthd_private, idle_work);
++
++	mutex_lock(&dev_priv->vb2_queue_lock);
++	/* Streaming, suspend and remove look after the chip themselves */
++	if (!dev_priv->streaming && !dev_priv->suspended && !dev_priv->removing)
++		fthd_hw_power_down(dev_priv);
++	mutex_unlock(&dev_priv->vb2_queue_lock);
++}
++
++/* Power the chip off once it has been idle for idle_poweroff_ms. */
++void fthd_schedule_idle(struct fthd_private *dev_priv)
++{
++	int ms = READ_ONCE(idle_poweroff_ms);
++
++	if (ms >= 0 && !dev_priv->streaming && !dev_priv->powered_off &&
++	    !dev_priv->suspended && !dev_priv->removing)
++		mod_delayed_work(system_wq, &dev_priv->idle_work,
++				 msecs_to_jiffies(ms));
++}
++
+ /*
+  * The firmware stopped answering. Commands are refused from now on and the
+  * recovery work restarts the chip; the macOS driver also answers a stalled
+@@ -632,9 +691,7 @@ void fthd_hw_halt(struct fthd_private *dev_priv)
+ {
+ 	if (dev_priv->hw_state == FTHD_HW_UP)
+ 		dev_priv->hw_state = FTHD_HW_FAILED;
+-	fthd_hw_teardown(dev_priv);
+-	if (!dev_priv->powered_off)
+-		fthd_power_off(dev_priv);
++	fthd_hw_power_down(dev_priv);
+ }
+ 
+ static void fthd_pci_remove(struct pci_dev *pdev)
+@@ -649,11 +706,14 @@ static void fthd_pci_remove(struct pci_dev *pdev)
+ 	dev_priv->removing = true;
+ 	mutex_unlock(&dev_priv->vb2_queue_lock);
+ 	cancel_work_sync(&dev_priv->recover_work);
++	cancel_delayed_work_sync(&dev_priv->idle_work);
+ 
+ 	fthd_debugfs_exit(dev_priv);
+ 
+ 	mutex_lock(&dev_priv->vb2_queue_lock);
+ 	fthd_hw_teardown(dev_priv);
++	/* The next probe expects a powered camera with its BARs set up */
++	fthd_power_restore(dev_priv);
+ 	mutex_unlock(&dev_priv->vb2_queue_lock);
+ 
+ 	fthd_v4l2_unregister(dev_priv);
+@@ -758,6 +818,7 @@ static int fthd_pci_probe(struct pci_dev *pdev,
+ 	INIT_WORK(&dev_priv->irq_work, fthd_irq_work);
+ 	INIT_WORK(&dev_priv->recover_work, fthd_recover_work);
+ 	INIT_DELAYED_WORK(&dev_priv->frame_watchdog, fthd_frame_watchdog);
++	INIT_DELAYED_WORK(&dev_priv->idle_work, fthd_idle_work);
+ 
+ 	dev_priv->pdev = pdev;
+ 
+@@ -784,6 +845,10 @@ static int fthd_pci_probe(struct pci_dev *pdev,
+ 	ret = fthd_debugfs_init(dev_priv);
+ 	if (ret)
+ 		goto fail_v4l2;
++
++	mutex_lock(&dev_priv->vb2_queue_lock);
++	fthd_schedule_idle(dev_priv);
++	mutex_unlock(&dev_priv->vb2_queue_lock);
+ 	return 0;
+ fail_v4l2:
+ 	fthd_v4l2_unregister(dev_priv);
+@@ -810,10 +875,16 @@ static int fthd_pm_suspend(struct device *dev)
+ 	dev_priv->suspended = true;
+ 	mutex_unlock(&dev_priv->vb2_queue_lock);
+ 	cancel_work_sync(&dev_priv->recover_work);
++	cancel_delayed_work_sync(&dev_priv->idle_work);
+ 
+ 	mutex_lock(&dev_priv->vb2_queue_lock);
+ 	/* Queued buffers stay with the driver until the stream resumes */
+ 	fthd_hw_teardown(dev_priv);
++	/*
++	 * The PCI core saves and restores the config space around sleep; an
++	 * idle camera without power has none to save.
++	 */
++	fthd_power_restore(dev_priv);
+ 	mutex_unlock(&dev_priv->vb2_queue_lock);
+ 	return 0;
+ }
+diff --git a/fthd_drv.h b/fthd_drv.h
+index 70f6d22..7c040b4 100644
+--- a/fthd_drv.h
++++ b/fthd_drv.h
+@@ -153,6 +153,7 @@ struct fthd_private {
+ 	unsigned int recover_count;
+ 	struct work_struct recover_work;
+ 	struct delayed_work frame_watchdog;
++	struct delayed_work idle_work;
+ 	unsigned int hang_count;
+ 	bool force_recover;
+ 
+@@ -169,5 +170,6 @@ extern int fthd_hw_restart(struct fthd_private *dev_priv, bool power_cycle);
+ extern void fthd_schedule_recovery(struct fthd_private *dev_priv);
+ extern void fthd_hw_hung(struct fthd_private *dev_priv, const char *why);
+ extern void fthd_hw_halt(struct fthd_private *dev_priv);
++extern void fthd_schedule_idle(struct fthd_private *dev_priv);
+ 
+ #endif
+diff --git a/fthd_v4l2.c b/fthd_v4l2.c
+index 4108928..cd35f46 100644
+--- a/fthd_v4l2.c
++++ b/fthd_v4l2.c
+@@ -510,6 +510,7 @@ static int fthd_start_streaming(struct vb2_queue *vq, unsigned int count)
+ 
+ 	pr_debug("count = %d\n", count);
+ 	dev_priv->sequence = 0;
++	cancel_delayed_work(&dev_priv->idle_work);
+ 
+ 	/* A failed recovery or suspend left the chip down; try once more */
+ 	if (dev_priv->hw_state != FTHD_HW_UP) {
+@@ -534,6 +535,7 @@ static int fthd_start_streaming(struct vb2_queue *vq, unsigned int count)
+ fail:
+ 	/* vb2 owns the buffers again if the queue never starts. */
+ 	fthd_return_drv_buffers(dev_priv, VB2_BUF_STATE_QUEUED);
++	fthd_schedule_idle(dev_priv);
+ 	return ret;
+ }
+ 
+@@ -552,8 +554,10 @@ static void fthd_stop_streaming(struct vb2_queue *vq)
+ 	/* After a channel stop the firmware returns what it holds */
+ 	if (!ret && wait_event_timeout(vq->done_wq,
+ 				       !atomic_read(&vq->owned_by_drv_count),
+-				       msecs_to_jiffies(FTHD_FRAME_TIMEOUT_MS)))
++				       msecs_to_jiffies(FTHD_FRAME_TIMEOUT_MS))) {
++		fthd_schedule_idle(dev_priv);
+ 		return;
++	}
+ 
+ 	/*
+ 	 * The firmware does not respond or keeps buffers. Cut its power before
+-- 
+2.56.0
+

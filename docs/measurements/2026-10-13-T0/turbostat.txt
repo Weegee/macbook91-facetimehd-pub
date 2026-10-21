@@ -1,0 +1,72 @@
+Busy%	Bzy_MHz	Pkg%pc2	Pkg%pc3	Pkg%pc6	Pkg%pc7	Pkg%pc8	Pkg%pc9	PkgWatt	CorWatt
+21.74	746	2.61	3.39	5.40	0.09	0.00	0.00	1.39	0.47
+25.84	713	2.61	3.39	5.40	0.09	0.00	0.00	1.39	0.47
+18.79	742
+23.51	735
+18.84	811
+Busy%	Bzy_MHz	Pkg%pc2	Pkg%pc3	Pkg%pc6	Pkg%pc7	Pkg%pc8	Pkg%pc9	PkgWatt	CorWatt
+14.99	705	2.63	3.67	5.49	0.16	0.00	0.00	1.12	0.34
+20.33	693	2.63	3.67	5.49	0.16	0.00	0.00	1.12	0.34
+11.00	718
+17.68	691
+10.97	738
+Busy%	Bzy_MHz	Pkg%pc2	Pkg%pc3	Pkg%pc6	Pkg%pc7	Pkg%pc8	Pkg%pc9	PkgWatt	CorWatt
+14.80	682	2.90	3.10	6.94	0.09	0.00	0.00	1.07	0.32
+21.69	649	2.90	3.10	6.94	0.09	0.00	0.00	1.07	0.32
+11.33	755
+15.94	636
+10.22	744
+Busy%	Bzy_MHz	Pkg%pc2	Pkg%pc3	Pkg%pc6	Pkg%pc7	Pkg%pc8	Pkg%pc9	PkgWatt	CorWatt
+15.52	739	3.01	4.14	6.44	0.10	0.00	0.00	1.14	0.37
+19.77	704	3.01	4.14	6.44	0.10	0.00	0.00	1.14	0.37
+13.08	769
+16.65	726
+12.60	779
+Busy%	Bzy_MHz	Pkg%pc2	Pkg%pc3	Pkg%pc6	Pkg%pc7	Pkg%pc8	Pkg%pc9	PkgWatt	CorWatt
+13.45	649	3.27	4.77	6.68	0.11	0.00	0.00	1.03	0.28
+18.99	628	3.27	4.77	6.68	0.11	0.00	0.00	1.03	0.28
+9.14	691
+15.57	621
+10.09	691
+Busy%	Bzy_MHz	Pkg%pc2	Pkg%pc3	Pkg%pc6	Pkg%pc7	Pkg%pc8	Pkg%pc9	PkgWatt	CorWatt
+12.53	637	3.22	4.57	7.07	0.05	0.00	0.00	1.00	0.26
+17.72	620	3.22	4.57	7.07	0.05	0.00	0.00	1.00	0.26
+8.67	638
+15.00	629
+8.72	687
+Busy%	Bzy_MHz	Pkg%pc2	Pkg%pc3	Pkg%pc6	Pkg%pc7	Pkg%pc8	Pkg%pc9	PkgWatt	CorWatt
+13.51	647	3.30	4.35	7.42	0.12	0.00	0.00	1.02	0.28
+17.02	618	3.30	4.35	7.42	0.12	0.00	0.00	1.02	0.28
+10.48	673
+17.06	633
+9.49	696
+Busy%	Bzy_MHz	Pkg%pc2	Pkg%pc3	Pkg%pc6	Pkg%pc7	Pkg%pc8	Pkg%pc9	PkgWatt	CorWatt
+13.06	625	2.96	4.35	5.79	0.07	0.00	0.00	1.00	0.26
+17.63	614	2.96	4.35	5.79	0.07	0.00	0.00	1.00	0.26
+9.21	602
+16.89	625
+8.53	675
+Busy%	Bzy_MHz	Pkg%pc2	Pkg%pc3	Pkg%pc6	Pkg%pc7	Pkg%pc8	Pkg%pc9	PkgWatt	CorWatt
+21.97	733	3.32	3.80	5.79	0.04	0.00	0.00	1.36	0.45
+24.31	711	3.32	3.80	5.79	0.04	0.00	0.00	1.36	0.45
+19.39	737
+21.97	739
+22.19	747
+Busy%	Bzy_MHz	Pkg%pc2	Pkg%pc3	Pkg%pc6	Pkg%pc7	Pkg%pc8	Pkg%pc9	PkgWatt	CorWatt
+20.11	588	3.08	4.63	5.13	0.01	0.00	0.00	1.11	0.28
+22.19	586	3.08	4.63	5.13	0.01	0.00	0.00	1.11	0.28
+17.75	591
+19.89	582
+20.62	591
+Busy%	Bzy_MHz	Pkg%pc2	Pkg%pc3	Pkg%pc6	Pkg%pc7	Pkg%pc8	Pkg%pc9	PkgWatt	CorWatt
+26.42	575	3.62	2.63	6.11	0.05	0.00	0.00	1.20	0.34
+27.41	574	3.62	2.63	6.11	0.05	0.00	0.00	1.20	0.34
+23.14	576
+29.56	568
+25.56	582
+Busy%	Bzy_MHz	Pkg%pc2	Pkg%pc3	Pkg%pc6	Pkg%pc7	Pkg%pc8	Pkg%pc9	PkgWatt	CorWatt
+11.01	583	3.05	4.82	6.43	0.05	0.00	0.00	0.81	0.19
+15.69	620	3.05	4.82	6.43	0.05	0.00	0.00	0.81	0.19
+8.44	565
+11.37	562
+8.54	562

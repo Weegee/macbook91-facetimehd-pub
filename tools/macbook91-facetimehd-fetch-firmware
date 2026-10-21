@@ -1,0 +1,89 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Fetch firmware 5.60.0 and the sensor set files for the FaceTime HD camera
+# from Apple's macOS 10.12.6 combo update by HTTP range requests (~18 MB).
+#
+# Adapted from patjak/facetimehd-firmware 60ee212 (Makefile and
+# extract-firmware.sh, GPL-2.0): same ranges, offsets and hashes, but with TLS
+# verification on (the upstream Makefile uses curl -k) and every artifact
+# checked against a pinned sha256 before anything is written to OUTDIR.
+# Downloads only from Apple; executes nothing that was downloaded.
+#
+# The firmware is Apple's software under Apple's license terms. This project
+# does not distribute it and has not verified that those terms permit this
+# use; whoever runs this script downloads and uses it on their own
+# responsibility. The script asks for an explicit "yes" first (--yes skips it).
+#
+# usage: macbook91-facetimehd-fetch-firmware [--yes] [OUTDIR [KEEPDIR]]
+#   OUTDIR   receives facetimehd/firmware.bin and facetimehd/*_01XX.dat
+#            (default /usr/lib/firmware, which needs root)
+#   KEEPDIR  optional: keep AppleCameraInterface/AppleCameraAssistant there
+set -euo pipefail
+
+URL=https://updates.cdn-apple.com/2019/cert/041-90765-20191011-837e856d-b522-4865-b64c-641048ed77c4/macOSUpdCombo10.12.6.dmg
+H_DRV=e959244db1e0561f6d5590c8e5000a36816c592e2820bafe89af0bea75556aca
+H_ASST=af6a9de00472657e925f546753c818f9e33636030892b14ca96a1b4817ea58c7
+H_FW=240ef2e991f1d089d8228ce11d92b66bfa4b3d7289ec4fee228b64a713024330
+FW_OFF=81920 FW_LEN=602903
+# name offset size sha256 (offsets inside AppleCameraAssistant)
+SETFILES="
+1675 430080 18044 b7a38aef2755721bb28c92d84a15654b17e9fb3b0a0f088a384a981fc8fe16d6
+"
+
+YES=0
+case ${1:-} in
+--yes) YES=1; shift ;;
+-h|--help) sed -n '3,20p' "$0"; exit 0 ;;
+-*) sed -n '3,20p' "$0" >&2; exit 2 ;;
+esac
+OUT=${1:-/usr/lib/firmware}/facetimehd KEEP=${2:-}
+if [ "$YES" != 1 ]; then
+	cat <<'MSG'
+
+  IMPORTANT: this downloads Apple software and extracts Apple's firmware
+
+  The FaceTime HD camera needs Apple's firmware. This script downloads about
+  18 MB of Apple's macOS 10.12.6 combo update from Apple's servers
+  (updates.cdn-apple.com) and extracts the camera firmware from it.
+
+  The firmware is Apple's proprietary software under Apple's license terms.
+  This project does not distribute it and has NOT verified whether Apple's
+  terms allow this use. You download and use it on your own account and at
+  your own responsibility.
+
+MSG
+	printf '  Type yes to continue: '
+	read -r answer </dev/tty || answer=
+	[ "$answer" = yes ] || { echo "aborted, nothing downloaded" >&2; exit 1; }
+fi
+for c in curl xzcat gzip sha256sum dd; do command -v $c >/dev/null || { echo "missing: $c" >&2; exit 1; }; done
+
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+get() { curl -fsS --proto '=https' --tlsv1.2 -r "$1" "$URL" | xzcat -q > "$T/$2"; }
+check() { [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$2" ] || { echo "sha256 mismatch: $1" >&2; exit 1; }; }
+
+get 699186570-703316225 c1
+get 703316242-707986973 c2
+get 430282546-439105037 ca
+{ tail -c 249719 "$T/c1"; head -c 507353 "$T/c2"; } > "$T/AppleCameraInterface"
+head -c $((7477241 + 515632)) "$T/ca" | tail -c 515632 > "$T/AppleCameraAssistant"
+check "$T/AppleCameraInterface" $H_DRV
+check "$T/AppleCameraAssistant" $H_ASST
+
+dd bs=1 skip=$FW_OFF count=$FW_LEN if="$T/AppleCameraInterface" status=none | gzip -dc > "$T/firmware.bin"
+check "$T/firmware.bin" $H_FW
+install -d -m755 "$OUT"
+install -m644 "$T/firmware.bin" "$OUT/firmware.bin"
+
+echo "$SETFILES" | while read -r name off size sum; do
+	[ -n "$name" ] || continue
+	dd bs=1 skip=$off count=$size if="$T/AppleCameraAssistant" of="$T/$name" status=none
+	check "$T/$name" $sum
+	install -m644 "$T/$name" "$OUT/${name}_01XX.dat"
+done
+
+if [ -n "$KEEP" ]; then
+	install -d -m700 "$KEEP"
+	install -m600 "$T/AppleCameraInterface" "$T/AppleCameraAssistant" "$KEEP/"
+fi
+echo "firmware 5.60.0 and 1675_01XX.dat verified and written to $OUT"

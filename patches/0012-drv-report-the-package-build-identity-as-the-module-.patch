@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weegee <748975+Weegee@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 13:46:38 +0200
+Subject: [PATCH] drv: report the package build identity as the module version
+
+The MacBook9,1 package defines FTHD_SRCID as its version plus a hash of
+the driver sources. Exposed through MODULE_VERSION it shows in modinfo
+and in /sys/module/<name>/version, so a verifier can tell which source
+the loaded module was built from. Builds without the define are unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ fthd_drv.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/fthd_drv.c b/fthd_drv.c
+index b5431f3..e5cb70c 100644
+--- a/fthd_drv.c
++++ b/fthd_drv.c
+@@ -970,4 +970,12 @@ MODULE_FIRMWARE("facetimehd/9112_01XX.dat");
+ MODULE_DEVICE_TABLE(pci, fthd_pci_id_table);
+ MODULE_AUTHOR("Patrik Jakobsson <patrik.r.jakobsson@gmail.com>");
+ MODULE_DESCRIPTION("FacetimeHD camera driver");
++
++/*
++ * A package build passes its version and a hash of these sources, so that
++ * the loaded module (/sys/module/<name>/version) can be traced to its source.
++ */
++#ifdef FTHD_SRCID
++MODULE_VERSION(FTHD_SRCID);
++#endif
+ MODULE_LICENSE("GPL");
+-- 
+2.56.0
+

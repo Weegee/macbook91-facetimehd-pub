@@ -1,0 +1,361 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weegee <748975+Weegee@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 10:06:44 +0200
+Subject: [PATCH 8/9] drv: use dev_pm_ops and keep the stream across system
+ sleep
+
+The legacy PCI suspend hook refused to suspend while the camera was open
+(-EBUSY) and otherwise ran remove and probe, so any open application
+blocked system sleep.
+
+Suspend now stops the firmware and tears the chip down while the driver
+keeps the queued buffers. In suspend-to-idle the driver also cuts the
+camera power through ACPI CMPE, which nothing else does; the config space
+is saved first so the PCI core leaves the powered off device alone, and
+resume_noirq powers it on before pci_pm_resume() restores the config.
+Resume hands the bring-up to the recovery work, so DDR training and
+firmware boot no longer delay system resume, and a running stream
+continues where it stopped.
+
+The config space copy for power cycles now uses pci_store_saved_state().
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ fthd_debugfs.c |   3 +
+ fthd_drv.c     | 177 ++++++++++++++++++++++++++++++++++++-------------
+ fthd_drv.h     |  10 +++
+ 3 files changed, 144 insertions(+), 46 deletions(-)
+
+diff --git a/fthd_debugfs.c b/fthd_debugfs.c
+index e4f3240..8fb9c4a 100644
+--- a/fthd_debugfs.c
++++ b/fthd_debugfs.c
+@@ -186,6 +186,9 @@ static int seq_state_read(struct seq_file *seq, void *data)
+ 	seq_printf(seq, "hw_state: %s\nstreaming: %d\nsuspended: %d\nrecoveries: %u\n",
+ 		   fthd_hw_state_names[dev_priv->hw_state], dev_priv->streaming,
+ 		   dev_priv->suspended, dev_priv->recover_count);
++	seq_printf(seq, "power_cycles: %u\nlast_off_ms: %lld\npowered_off: %d\n",
++		   dev_priv->power_cycles, dev_priv->last_off_ms,
++		   dev_priv->powered_off);
+ 	mutex_unlock(&dev_priv->vb2_queue_lock);
+ 	return 0;
+ }
+diff --git a/fthd_drv.c b/fthd_drv.c
+index 7076741..935c799 100644
+--- a/fthd_drv.c
++++ b/fthd_drv.c
+@@ -21,6 +21,7 @@
+ #include <linux/spinlock.h>
+ #include <linux/sched.h>
+ #include <linux/wait.h>
++#include <linux/suspend.h>
+ #include <linux/videodev2.h>
+ #include "fthd_drv.h"
+ #include "fthd_hw.h"
+@@ -440,11 +441,45 @@ static void fthd_hw_teardown(struct fthd_private *dev_priv)
+ 	fthd_buffer_exit(dev_priv);
+ }
+ 
++/* Camera power timing of the macOS driver (DisableS2Chip, EnableS2Chip) */
++#define FTHD_POWER_OFF_MS	250
++#define FTHD_POWER_ON_MS	20
++
++/* Cut the camera power through the ACPI CMPE method. */
++static void fthd_power_off(struct fthd_private *dev_priv)
++{
++	pci_clear_master(dev_priv->pdev);
++	if (isp_acpi_set_power(dev_priv, 0))
++		dev_warn(&dev_priv->pdev->dev, "failed to power the camera off\n");
++	/* Boot time keeps counting while the system sleeps */
++	dev_priv->power_off_time = ktime_get_boottime();
++	dev_priv->powered_off = true;
++}
++
++/* Power the camera on again; its config space still has to be restored. */
++static int fthd_power_on(struct fthd_private *dev_priv)
++{
++	s64 off_ms = ktime_ms_delta(ktime_get_boottime(), dev_priv->power_off_time);
++	int ret;
++
++	if (off_ms < FTHD_POWER_OFF_MS)
++		msleep(FTHD_POWER_OFF_MS - off_ms);
++
++	ret = isp_acpi_set_power(dev_priv, 1);
++	dev_priv->powered_off = false;
++	dev_priv->last_off_ms = ktime_ms_delta(ktime_get_boottime(),
++					       dev_priv->power_off_time);
++	dev_priv->power_cycles++;
++	if (ret)
++		return ret;
++
++	msleep(FTHD_POWER_ON_MS);
++	return 0;
++}
++
+ /*
+- * Cut and restore the camera power through the ACPI CMPE method. This is
+- * the only reset that also restarts a hung ISP CPU; the macOS driver does
+- * the same (DisableS2Chip: CMPE(0) + 250 ms, EnableS2Chip: CMPE(1) + 20 ms).
+- * The PCI config space is lost with the power and is restored afterwards.
++ * Power cycling is the only reset that also restarts a hung ISP CPU; the
++ * macOS driver recovers the same way.
+  */
+ static int fthd_power_cycle(struct fthd_private *dev_priv)
+ {
+@@ -452,35 +487,26 @@ static int fthd_power_cycle(struct fthd_private *dev_priv)
+ 	u32 id;
+ 	int ret;
+ 
+-	pci_read_config_dword(pdev, PCI_VENDOR_ID, &id);
+-	if (id == (PCI_VENDOR_ID_BROADCOM | (pdev->device << 16)))
+-		pci_save_state(pdev);
+-	else
+-		pdev->state_saved = true; /* the copy from the last bring-up */
+-
+-	pci_clear_master(pdev);
+-
+-	ret = isp_acpi_set_power(dev_priv, 0);
+-	if (ret)
+-		return ret;
+-	msleep(250);
++	if (!dev_priv->powered_off)
++		fthd_power_off(dev_priv);
+ 
+-	ret = isp_acpi_set_power(dev_priv, 1);
++	ret = fthd_power_on(dev_priv);
+ 	if (ret)
+ 		return ret;
+-	msleep(20);
+ 
++	/* The config space went with the power; restore the copy from probe */
++	pci_load_saved_state(pdev, dev_priv->pci_state);
+ 	pci_restore_state(pdev);
++
+ 	pci_read_config_dword(pdev, PCI_VENDOR_ID, &id);
+ 	if (id != (PCI_VENDOR_ID_BROADCOM | (pdev->device << 16))) {
+ 		dev_err(&pdev->dev,
+ 			"camera did not return after power cycle (id %08x)\n", id);
+ 		return -ENODEV;
+ 	}
++
+ 	/* PME_En comes up undefined; the PCI core keeps it off in D0 */
+ 	pci_pme_active(pdev, false);
+-	pci_save_state(pdev);
+-
+ 	return 0;
+ }
+ 
+@@ -528,31 +554,45 @@ static void fthd_recover_work(struct work_struct *work)
+ {
+ 	struct fthd_private *dev_priv =
+ 		container_of(work, struct fthd_private, recover_work);
++	bool resuming, power_cycle;
+ 	int attempt, ret = -EIO;
+ 
+ 	mutex_lock(&dev_priv->vb2_queue_lock);
+ 
++	resuming = dev_priv->resuming;
++	dev_priv->resuming = false;
++	/* Fresh from power-on in resume, the chip needs no further reset */
++	power_cycle = !dev_priv->fresh_power;
++	dev_priv->fresh_power = false;
++
+ 	/* Resume brings the hardware up anyway, remove tears it down */
+ 	if (dev_priv->suspended || dev_priv->removing)
+ 		goto out;
+ 
++	/* A stream started after resume may have been faster */
++	if (resuming && dev_priv->hw_state == FTHD_HW_UP)
++		goto out;
++
+ 	for (attempt = 1; attempt <= FTHD_RECOVER_ATTEMPTS; attempt++) {
+-		dev_warn(&dev_priv->pdev->dev,
+-			 "restarting camera with power cycle (attempt %d of %d)\n",
+-			 attempt, FTHD_RECOVER_ATTEMPTS);
+-		ret = fthd_hw_restart(dev_priv, true);
++		if (!resuming || attempt > 1)
++			dev_warn(&dev_priv->pdev->dev,
++				 "restarting camera with power cycle (attempt %d of %d)\n",
++				 attempt, FTHD_RECOVER_ATTEMPTS);
++		ret = fthd_hw_restart(dev_priv, power_cycle);
+ 		if (!ret)
+ 			break;
++		power_cycle = true;
+ 		msleep(500 * attempt);
+ 	}
+ 
+-	dev_priv->recover_count++;
++	if (!resuming)
++		dev_priv->recover_count++;
+ 	if (ret) {
+ 		dev_err(&dev_priv->pdev->dev,
+-			"camera recovery failed (%d); close and reopen to retry\n",
++			"camera restart failed (%d); restarting the stream retries\n",
+ 			ret);
+ 		fthd_v4l2_buffers_error(dev_priv);
+-	} else {
++	} else if (!resuming) {
+ 		dev_info(&dev_priv->pdev->dev, "camera recovered\n");
+ 	}
+ out:
+@@ -589,6 +629,7 @@ static void fthd_pci_remove(struct pci_dev *pdev)
+ 	fthd_irq_uninstall(dev_priv);
+ 	pci_disable_msi(pdev);
+ 	fthd_pci_unmap(dev_priv);
++	kfree(dev_priv->pci_state);
+ 	kfree(dev_priv);
+ out:
+ 	pci_disable_device(pdev);
+@@ -692,6 +733,11 @@ static int fthd_pci_probe(struct pci_dev *pdev,
+ 
+ 	/* Kept for restoring the config space after a power cycle */
+ 	pci_save_state(pdev);
++	dev_priv->pci_state = pci_store_saved_state(pdev);
++	if (!dev_priv->pci_state) {
++		ret = -ENOMEM;
++		goto fail_pci;
++	}
+ 
+ 	ret = fthd_hw_bringup(dev_priv);
+ 	if (ret)
+@@ -715,36 +761,78 @@ fail_pci:
+ 	pci_disable_msi(pdev);
+ 	fthd_pci_unmap(dev_priv);
+ 	pci_disable_device(pdev);
++	kfree(dev_priv->pci_state);
+ fail_work:
+ 	cancel_work_sync(&dev_priv->irq_work);
+ 	kfree(dev_priv);
+ 	return ret;
+ }
+ 
+-#ifdef CONFIG_PM
+-static int fthd_pci_suspend(struct pci_dev *pdev, pm_message_t state)
++static int fthd_pm_suspend(struct device *dev)
++{
++	struct fthd_private *dev_priv = dev_get_drvdata(dev);
++
++	mutex_lock(&dev_priv->vb2_queue_lock);
++	dev_priv->suspended = true;
++	mutex_unlock(&dev_priv->vb2_queue_lock);
++	cancel_work_sync(&dev_priv->recover_work);
++
++	mutex_lock(&dev_priv->vb2_queue_lock);
++	/* Queued buffers stay with the driver until the stream resumes */
++	fthd_hw_teardown(dev_priv);
++	mutex_unlock(&dev_priv->vb2_queue_lock);
++	return 0;
++}
++
++/*
++ * In suspend-to-idle nothing else cuts the camera power; do it like the
++ * macOS driver. With the config space saved here the PCI core leaves the
++ * powered off device alone, and resume_noirq powers it on again before
++ * pci_pm_resume() restores the config space.
++ */
++static int fthd_pm_suspend_noirq(struct device *dev)
+ {
+-	struct fthd_private *dev_priv = pci_get_drvdata(pdev);
+-
+-	/* Tearing down the firmware and DMA mappings under an open V4L2 file
+-	 * leaves the file handle pointing at freed driver state.  Refuse the
+-	 * transition instead of risking a use-after-free on resume. */
+-	if (dev_priv && atomic_read(&dev_priv->users)) {
+-		dev_warn(&pdev->dev,
+-			 "camera is in use; close video applications before suspend\n");
+-		return -EBUSY;
++	struct fthd_private *dev_priv = dev_get_drvdata(dev);
++
++	if (pm_suspend_no_platform()) {
++		pci_save_state(to_pci_dev(dev));
++		fthd_power_off(dev_priv);
+ 	}
++	return 0;
++}
+ 
+-	fthd_pci_remove(pdev);
++static int fthd_pm_resume_noirq(struct device *dev)
++{
++	struct fthd_private *dev_priv = dev_get_drvdata(dev);
++
++	if (!dev_priv->powered_off)
++		return 0;
+ 
++	if (fthd_power_on(dev_priv))
++		dev_err(dev, "failed to power the camera on\n");
++	else
++		dev_priv->fresh_power = true;
+ 	return 0;
+ }
+ 
+-static int fthd_pci_resume(struct pci_dev *pdev)
++static int fthd_pm_resume(struct device *dev)
+ {
+-	return fthd_pci_probe(pdev, NULL);
++	struct fthd_private *dev_priv = dev_get_drvdata(dev);
++
++	mutex_lock(&dev_priv->vb2_queue_lock);
++	dev_priv->suspended = false;
++	dev_priv->resuming = true;
++	mutex_unlock(&dev_priv->vb2_queue_lock);
++
++	/* DDR training and firmware boot take most of a second */
++	fthd_schedule_recovery(dev_priv);
++	return 0;
+ }
+-#endif /* CONFIG_PM */
++
++static const struct dev_pm_ops fthd_pm_ops = {
++	SYSTEM_SLEEP_PM_OPS(fthd_pm_suspend, fthd_pm_resume)
++	NOIRQ_SYSTEM_SLEEP_PM_OPS(fthd_pm_suspend_noirq, fthd_pm_resume_noirq)
++};
+ 
+ static const struct pci_device_id fthd_pci_id_table[] = {
+ 	{ PCI_DEVICE(0x14e4, 0x1570), 4 },
+@@ -757,10 +845,7 @@ static struct pci_driver fthd_pci_driver = {
+ 	.remove = fthd_pci_remove,
+ 	.shutdown = fthd_pci_remove,
+ 	.id_table = fthd_pci_id_table,
+-#ifdef CONFIG_PM
+-	.suspend = fthd_pci_suspend,
+-	.resume = fthd_pci_resume,
+-#endif
++	.driver.pm = pm_sleep_ptr(&fthd_pm_ops),
+ };
+ 
+ module_pci_driver(fthd_pci_driver);
+diff --git a/fthd_drv.h b/fthd_drv.h
+index f1f8536..141b41d 100644
+--- a/fthd_drv.h
++++ b/fthd_drv.h
+@@ -11,6 +11,7 @@
+ #define _FTHD_DRV_H
+ 
+ #include <linux/pci.h>
++#include <linux/ktime.h>
+ #include <linux/spinlock.h>
+ #include <linux/wait.h>
+ #include <linux/mutex.h>
+@@ -143,10 +144,19 @@ struct fthd_private {
+ 	/* Hardware life cycle; changed only with vb2_queue_lock held */
+ 	enum fthd_hw_state hw_state;
+ 	bool suspended;
++	bool resuming;
+ 	bool streaming;
+ 	bool removing;
+ 	unsigned int recover_count;
+ 	struct work_struct recover_work;
++
++	/* Camera power through ACPI CMPE */
++	struct pci_saved_state *pci_state;
++	bool powered_off;
++	bool fresh_power;
++	ktime_t power_off_time;
++	unsigned int power_cycles;
++	s64 last_off_ms;
+ };
+ 
+ extern int fthd_hw_restart(struct fthd_private *dev_priv, bool power_cycle);
+-- 
+2.56.0
+

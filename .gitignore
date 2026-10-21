@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+/src/
+/build/
+/dist/
+
+# A makepkg run directly in packaging/arch, and built packages anywhere.
+packaging/arch/pkg/
+packaging/arch/src/
+packaging/arch/*.tar
+*.pkg.tar.*
+

@@ -1,0 +1,203 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Weegee <748975+Weegee@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 09:41:07 +0200
+Subject: [PATCH 5/9] isp: make isp_init()/isp_uninit() leak-free and safe to
+ repeat
+
+isp_init() returned on most errors without releasing what it had set
+up, never freed the IPC queue, heap and firmware argument objects at
+all, and freed the S2 memory root with those objects still linked.
+isp_free_set_file() left a dangling pointer, so a second bring-up on
+the same device hit BUG_ON(dev_priv->set_file).
+
+Track the queue, heap and argument objects, let isp_uninit() release
+everything and reset the pointers so it can run on any partial state,
+and call it from a single place when isp_init() fails. Also stop
+isp_mem_create() from dereferencing NULL on allocation failure, release
+the firmware on every error path, refuse firmware larger than its
+preallocated window and do not dereference a missing ACPI result.
+
+Needed so that suspend and recovery can bring the ISP up and down
+repeatedly without reallocating the driver state.
+---
+ fthd_drv.h |  1 +
+ fthd_isp.c | 57 ++++++++++++++++++++++++++++++++++++++++++++++--------
+ 2 files changed, 50 insertions(+), 8 deletions(-)
+
+diff --git a/fthd_drv.h b/fthd_drv.h
+index 4f006a0..b874be8 100644
+--- a/fthd_drv.h
++++ b/fthd_drv.h
+@@ -91,6 +91,7 @@ struct fthd_private {
+ 	struct isp_mem_obj *set_file;
+ 	struct isp_mem_obj *ipc_queue;
+ 	struct isp_mem_obj *heap;
++	struct isp_mem_obj *fw_args;
+ 
+ 	/* Firmware channels */
+ 	int num_channels;
+diff --git a/fthd_isp.c b/fthd_isp.c
+index 8e459ab..bc294cf 100644
+--- a/fthd_isp.c
++++ b/fthd_isp.c
+@@ -61,7 +61,7 @@ struct isp_mem_obj *isp_mem_create(struct fthd_private *dev_priv,
+ 			"Failed to allocate resource (size: %Ld, start: %Ld, end: %Ld)\n",
+ 			size, root->start, root->end);
+ 		kfree(obj);
+-		obj = NULL;
++		return NULL;
+ 	}
+ 
+ 	obj->offset = obj->base.start - root->start;
+@@ -116,7 +116,7 @@ static int isp_acpi_set_power(struct fthd_private *dev_priv, int power)
+ 
+ 	result = buffer.pointer;
+ 
+-	if (result->type != ACPI_TYPE_INTEGER || result->integer.value != 0) {
++	if (!result || result->type != ACPI_TYPE_INTEGER || result->integer.value != 0) {
+ 		dev_err(&dev_priv->pdev->dev,
+ 			"Invalid ACPI response (len: %Ld)\n", buffer.length);
+ 		ret = -EINVAL;
+@@ -152,8 +152,10 @@ static int isp_load_firmware(struct fthd_private *dev_priv)
+ 		return ret;
+ 
+ 	/* Firmware memory is preallocated at init time */
+-	if (!dev_priv->firmware)
++	if (!dev_priv->firmware) {
++		release_firmware(fw);
+ 		return -ENOMEM;
++	}
+ 
+ 	if (dev_priv->firmware->base.start != dev_priv->mem->start) {
+ 		dev_err(&dev_priv->pdev->dev,
+@@ -161,9 +163,17 @@ static int isp_load_firmware(struct fthd_private *dev_priv)
+ 			dev_priv->firmware->offset);
+ 		isp_mem_destroy(dev_priv->firmware);
+ 		dev_priv->firmware = NULL;
++		release_firmware(fw);
+ 		return -EBUSY;
+ 	}
+ 
++	if (fw->size > FTHD_MEM_FW_SIZE) {
++		dev_err(&dev_priv->pdev->dev,
++			"Firmware too big (%zu bytes)\n", fw->size);
++		release_firmware(fw);
++		return -EFBIG;
++	}
++
+ 	FTHD_S2_MEMCPY_TOIO(dev_priv->firmware->offset, fw->data, fw->size);
+ 
+ 	/* Might need a flush here if we map ISP memory cached */
+@@ -191,6 +201,14 @@ static void isp_free_channel_info(struct fthd_private *priv)
+ 	}
+ 	kfree(priv->channels);
+ 	priv->channels = NULL;
++	priv->num_channels = 0;
++	priv->channel_terminal = NULL;
++	priv->channel_io = NULL;
++	priv->channel_debug = NULL;
++	priv->channel_buf_h2t = NULL;
++	priv->channel_buf_t2h = NULL;
++	priv->channel_shared_malloc = NULL;
++	priv->channel_io_t2h = NULL;
+ }
+ 
+ static struct fw_channel *isp_get_chan_index(struct fthd_private *priv, const char *name)
+@@ -445,8 +463,8 @@ static int fthd_isp_cmd_powerdown(struct fthd_private *dev_priv)
+ 
+ static void isp_free_set_file(struct fthd_private *dev_priv)
+ {
+-	if (dev_priv->set_file)
+-		isp_mem_destroy(dev_priv->set_file);
++	isp_mem_destroy(dev_priv->set_file);
++	dev_priv->set_file = NULL;
+ }
+ 
+ int isp_powerdown(struct fthd_private *dev_priv)
+@@ -499,8 +517,16 @@ int isp_uninit(struct fthd_private *dev_priv)
+ 	FTHD_ISP_REG_WRITE(0xffffffff, ISP_IRQ_CLEAR);
+ 	isp_free_channel_info(dev_priv);
+ 	isp_free_set_file(dev_priv);
++	isp_mem_destroy(dev_priv->fw_args);
++	dev_priv->fw_args = NULL;
++	isp_mem_destroy(dev_priv->heap);
++	dev_priv->heap = NULL;
++	isp_mem_destroy(dev_priv->ipc_queue);
++	dev_priv->ipc_queue = NULL;
+ 	isp_mem_destroy(dev_priv->firmware);
++	dev_priv->firmware = NULL;
+ 	kfree(dev_priv->mem);
++	dev_priv->mem = NULL;
+ 	return 0;
+ }
+ 
+@@ -601,7 +627,8 @@ int fthd_isp_cmd_set_loadfile(struct fthd_private *dev_priv)
+ 	}
+ 
+ 	/* Firmware memory is preallocated at init time */
+-	BUG_ON(dev_priv->set_file);
++	if (WARN_ON(dev_priv->set_file))
++		isp_free_set_file(dev_priv);
+ 
+ 	file = isp_mem_create(dev_priv, FTHD_MEM_SET_FILE, fw->size);
+ 	FTHD_S2_MEMCPY_TOIO(file->offset, fw->data, fw->size);
+@@ -1350,7 +1377,7 @@ int fthd_stop_channel(struct fthd_private *dev_priv, int channel)
+ 	return fthd_isp_cmd_channel_temporal_filter_stop(dev_priv, 0);
+ }
+ 
+-int isp_init(struct fthd_private *dev_priv)
++static int __isp_init(struct fthd_private *dev_priv)
+ {
+ 	struct isp_mem_obj *fw_queue, *heap, *fw_args;
+ 	struct isp_fw_args fw_args_data;
+@@ -1425,6 +1452,7 @@ int isp_init(struct fthd_private *dev_priv)
+ 	fw_queue = isp_mem_create(dev_priv, FTHD_MEM_FW_QUEUE, queue_size);
+ 	if (!fw_queue)
+ 		return -ENOMEM;
++	dev_priv->ipc_queue = fw_queue;
+ 
+ 	/* Firmware heap max size is 4mb */
+ 	heap_size = FTHD_ISP_REG_READ(ISP_FW_HEAP_SIZE);
+@@ -1454,6 +1482,7 @@ int isp_init(struct fthd_private *dev_priv)
+ 		heap = isp_mem_create(dev_priv, FTHD_MEM_HEAP, heap_size);
+ 		if (!heap)
+ 			return -ENOMEM;
++		dev_priv->heap = heap;
+ 
+ 		FTHD_ISP_REG_WRITE(0, ISP_FW_CHAN_CTRL);
+ 
+@@ -1472,6 +1501,7 @@ int isp_init(struct fthd_private *dev_priv)
+ 		fw_args = isp_mem_create(dev_priv, FTHD_MEM_FW_ARGS, sizeof(struct isp_fw_args));
+ 		if (!fw_args)
+ 			return -ENOMEM;
++		dev_priv->fw_args = fw_args;
+ 
+ 		fw_args_data.__unknown = 2;
+ 		fw_args_data.fw_arg = 0;
+@@ -1523,7 +1553,6 @@ int isp_init(struct fthd_private *dev_priv)
+ 
+ 		if (retries >= 1000) {
+ 			dev_info(&dev_priv->pdev->dev, "Init failed! No magic value\n");
+-			isp_uninit(dev_priv);
+ 			return -EIO;
+ 		} /* FIXME: free on error path */
+ 		dev_info(&dev_priv->pdev->dev, "magic value: %08x after %d ms\n", reg, (retries - 1) * 10);
+@@ -1531,3 +1560,15 @@ int isp_init(struct fthd_private *dev_priv)
+ 
+ 	return 0;
+ }
++
++/* isp_uninit() copes with any partially initialized state, so every error
++ * path of __isp_init() can leave the cleanup to it. */
++int isp_init(struct fthd_private *dev_priv)
++{
++	int ret;
++
++	ret = __isp_init(dev_priv);
++	if (ret)
++		isp_uninit(dev_priv);
++	return ret;
++}
+-- 
+2.56.0
+
