@@ -3,6 +3,31 @@
 Versions have the form YYYYMMDD.NN (release date, NN counts releases that
 day). The release tag is v<version>.
 
+## 20261026.01
+
+Kernel series note. No driver change.
+
+- Driver: the same upstream commit c9b063a and patches 0001-0017 as
+  20261021.01; module source identity 949038441c655353 unchanged.
+- The DKMS tree carries `TESTED-SERIES` (from `packaging/overlay/`): the
+  kernel series on which `macbook91-facetimehd-verify` passed on the test
+  machine, 6.18 and 7.2. DKMS still builds the driver for every kernel;
+  `dkms.conf` sets no `BUILD_EXCLUSIVE_KERNEL`.
+- New pacman hook `71-macbook91-facetimehd-series.hook` with
+  `/usr/lib/macbook91-facetimehd/kernel-series`, the only reader of that list:
+  after a transaction that installs or upgrades a kernel or this package it
+  prints a two-line note for every installed kernel of a series not in the
+  list, with the tested series and the LTS kernel as the fallback. It builds
+  and blocks nothing and never fails the transaction. A series joins the list
+  in a later release, after a verify PASS on it.
+- Kernel 7.3: on 7.3.0-4-cachyos DKMS built 20261021.01, the module loaded and
+  probed the camera (firmware and set file loaded, no driver errors in that
+  boot). Capture, idle power-off and suspend were not run on 7.3, so 7.3 is
+  not in the list and the hook names 7.3 kernels.
+- Tests: hermetic tests of the list, the note on a simulated kernel tree with
+  tested and untested series, the exit codes, the hook file and the installed
+  paths.
+
 ## 20261021.01
 
 First release prepared for a public repository. Documentation, licensing and
