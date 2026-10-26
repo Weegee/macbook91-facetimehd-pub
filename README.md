@@ -11,7 +11,15 @@ Developed and tested on one MacBook9,1, the test machine (CachyOS, kernel
 7.2.9-cachyos). The package also builds, loads and passes
 `macbook91-facetimehd-verify` on the CachyOS LTS kernel
 6.18.55-2-cachyos-lts (booted on 2026-10-20 with 20261020.01). Suspend and
-resume on 6.18 have not been run.
+resume on 6.18 have not been run. On 7.3.0-4-cachyos DKMS builds the driver
+and it loads and probes the camera; image capture and suspend have not been
+run on 7.3.
+
+DKMS builds the driver for every installed kernel. The kernel series it has
+been tested on are listed in `packaging/overlay/TESTED-SERIES` (6.18 and 7.2);
+after a pacman transaction a hook prints a short note for every installed
+kernel of another series. If the camera misbehaves on such a kernel, boot the
+LTS kernel.
 
 ## AI assistance
 
@@ -155,11 +163,11 @@ echo 'options macbook91_facetimehd idle_poweroff_ms=-1' | sudo tee /etc/modprobe
 | `patches/` | numbered patches on top of upstream c9b063a (0001-0004 = PR #355) |
 | `packaging/upstream.lock` | upstream commit, tree hash and the SHA256 of every patch |
 | `packaging/fetch-upstream.sh` | assembles `src/macbook91-facetimehd/` from those, refuses any mismatch |
-| `packaging/overlay/` | the package's module `Kbuild`, `Makefile` and `dkms.conf` |
+| `packaging/overlay/` | the package's module `Kbuild`, `Makefile` and `dkms.conf`, and `TESTED-SERIES`, the kernel series the driver is tested on |
 | `packaging/mkdist.py` | the reproducible source tarball |
 | `packaging/arch/` | PKGBUILD, install scriptlet, `.SRCINFO` |
 | `release/<version>/` | promoted releases |
-| `tools/` | verify tool and firmware fetch script (both packaged), development helpers `dev-*.sh` |
+| `tools/` | verify tool, firmware fetch script, kernel-series note and its pacman hook (all packaged), development helpers `dev-*.sh` |
 | `tests/run-tests.sh` | hermetic tests |
 | `docs/` | research, hardware, design, measurements, test status |
 | `LICENSE`, `LICENSES/` | license texts: GPL-3.0-or-later (`LICENSE`), GPL-2.0-only and GPL-2.0-or-later (`LICENSES/`); the git repository also keeps the GPL-3.0 text as `LICENSES/GPL-3.0-or-later.txt`, which the source tarball leaves out |
@@ -171,6 +179,10 @@ echo 'options macbook91_facetimehd idle_poweroff_ms=-1' | sudo tee /etc/modprobe
 - `macbook91-facetimehd-verify` (packaged): one PASS/FAIL over package,
   firmware, DKMS build, loaded module identity, driver binding, a 60-frame
   capture and idle power-off. Read-only, no root.
+- `/usr/lib/macbook91-facetimehd/kernel-series` with the pacman hook
+  `71-macbook91-facetimehd-series.hook` (packaged): after a transaction that
+  installs or upgrades a kernel or this package, a note for every installed
+  kernel whose series is not in `TESTED-SERIES`. It builds and blocks nothing.
 - `tools/dev-*.sh`: helpers used while developing, run on the test machine.
 
 ## What is proven, and what is not
@@ -209,6 +221,14 @@ camera powered off after 5000 ms idle. The kernel log of that boot has no
 only matters on 7.2, which reports that warning; the check cannot fire on
 6.18 (`docs/test-status.json`: `hw.lts_kernel`).
 
+Kernel 7.3: the test machine booted 7.3.0-4-cachyos on 2026-10-24 with
+`macbook91-facetimehd-dkms` 20261021.01-1 installed. DKMS had built the module
+for that kernel, the module loaded and the camera firmware and set file
+loaded; the kernel log of that boot has no `macbook91_facetimehd` errors.
+`macbook91-facetimehd-verify` (capture, idle power-off) and suspend were not
+run on 7.3, so 7.3 is not in `TESTED-SERIES` (`docs/test-status.json`:
+`hw.kernel_7_3_probe`, `hw.kernel_7_3_verify`).
+
 Not verified: suspend and resume on 6.18, with and without the camera open
 (no suspend happened in that boot; `hw.lts_suspend`), battery effect of the
 idle power-off (only CPU package power was measured, on mains),
@@ -238,10 +258,10 @@ Licenses by path, as SPDX identifiers. `LICENSE` holds the GPL-3.0 text,
 | Path | License |
 |---|---|
 | everything not named below: tools, tests, packaging, documentation, data | GPL-3.0-or-later |
-| `packaging/overlay/`: the module's `Kbuild`, `Makefile` and `dkms.conf` | GPL-2.0-or-later: GPLv2 section 3 counts the scripts that build and install the module as part of its source |
+| `packaging/overlay/`: the module's `Kbuild`, `Makefile`, `dkms.conf` and `TESTED-SERIES` | GPL-2.0-or-later: GPLv2 section 3 counts the scripts that build and install the module as part of its source |
 | `tools/macbook91-facetimehd-fetch-firmware` | GPL-2.0-only: adapted from patjak/facetimehd-firmware (commit 60ee212, GPL-2.0) |
 | `patches/`: 0001-0004 by pschatzmann (upstream PR #355), 0005-0017 by this project | GPL-2.0-only, the license of the driver files they change |
-| `src/macbook91-facetimehd/` (assembled, not tracked): upstream's `fthd_*` files with the patches applied | GPL-2.0-only; its `Kbuild`, `Makefile` and `dkms.conf` are those from `packaging/overlay/`, GPL-2.0-or-later |
+| `src/macbook91-facetimehd/` (assembled, not tracked): upstream's `fthd_*` files with the patches applied | GPL-2.0-only; its `Kbuild`, `Makefile`, `dkms.conf` and `TESTED-SERIES` are those from `packaging/overlay/`, GPL-2.0-or-later |
 | `docs/diag/`: captured system output (lspci, DMI, wake sources, kernel log) and kernel configuration | not licensed by this project |
 
 Own files with comment syntax start with an `SPDX-License-Identifier` line;

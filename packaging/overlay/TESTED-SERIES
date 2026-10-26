@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Kernel series (X.Y) on which macbook91-facetimehd-verify has passed on the
+# MacBook9,1. DKMS builds the driver for every kernel; after a pacman
+# transaction, macbook91-facetimehd-kernel-series --hook prints a note for each
+# installed kernel of a series that is not listed here. Add a series only after
+# a verify PASS on it, in the next release.
+6.18
+7.2

@@ -26,7 +26,7 @@ check() { # check NAME COMMAND...
 	if "$@" >"$T/out" 2>&1; then ok "$name"; else bad "$name"; sed 's/^/         | /' "$T/out" | head -15; fi
 }
 
-SHELLS=(tools/macbook91-facetimehd-verify
+SHELLS=(tools/macbook91-facetimehd-verify tools/macbook91-facetimehd-kernel-series
 	tools/dev-cam-load.sh tools/dev-cam-unload.sh tools/dev-power-baseline.sh tools/dev-root-diag.sh
 	packaging/fetch-upstream.sh packaging/make-package.sh packaging/promote-release.sh
 	packaging/arch/macbook91-facetimehd-dkms.install tests/run-tests.sh)
@@ -38,7 +38,7 @@ FWX=tools/macbook91-facetimehd-fetch-firmware
 for f in "${SHELLS[@]}" "$FWX"; do check "bash -n $f" bash -n "$f"; done
 if command -v shellcheck >/dev/null; then
 	check "shellcheck (warnings) on packaged and packaging scripts" shellcheck -S warning -s bash \
-		tools/macbook91-facetimehd-verify \
+		tools/macbook91-facetimehd-verify tools/macbook91-facetimehd-kernel-series \
 		packaging/fetch-upstream.sh packaging/make-package.sh packaging/promote-release.sh \
 		packaging/arch/macbook91-facetimehd-dkms.install "$FWX"
 else
@@ -54,11 +54,12 @@ license_ok() { # README.md maps every path; these files name their license thems
 	grep -qx "license=('GPL-2.0-only' 'GPL-2.0-or-later' 'GPL-3.0-or-later')" packaging/arch/PKGBUILD || return 1
 	local f
 	# GPLv2 section 3: what builds and installs the module is part of its source.
-	for f in packaging/overlay/Kbuild packaging/overlay/Makefile packaging/overlay/dkms.conf; do
+	for f in packaging/overlay/Kbuild packaging/overlay/Makefile packaging/overlay/dkms.conf \
+		packaging/overlay/TESTED-SERIES; do
 		head -1 "$f" | grep -qx '# SPDX-License-Identifier: GPL-2.0-or-later' || { echo "no GPL-2.0-or-later SPDX line: $f"; return 1; }
 	done
 	for f in "${SHELLS[@]}" Makefile packaging/mkdist.py packaging/upstream.lock packaging/arch/PKGBUILD \
-		.gitignore; do
+		tools/macbook91-facetimehd-series.hook .gitignore; do
 		head -2 "$f" | grep -qx '# SPDX-License-Identifier: GPL-3.0-or-later' || { echo "no GPL-3.0-or-later SPDX line: $f"; return 1; }
 	done
 	# The extractor is adapted from patjak/facetimehd-firmware (GPL-2.0), so it stays GPL-2.0-only.
@@ -147,6 +148,60 @@ verify_wq_ok() {
 }
 check "verify warns about a workqueue warning naming the module" verify_wq_ok
 
+# --- kernel series note ----------------------------------------------------------
+# DKMS builds for every kernel; packaging/overlay/TESTED-SERIES is the one list
+# of tested series, and the pacman hook only prints a note for the others.
+KS=tools/macbook91-facetimehd-kernel-series
+ks_list_ok() {
+	local want
+	want=$(grep -vE '^(#|$)' packaging/overlay/TESTED-SERIES | paste -sd' ')
+	[ -n "$want" ] && [ "$(bash "$KS" --list --series-file packaging/overlay/TESTED-SERIES)" = "$want" ]
+}
+check "TESTED-SERIES parses, kernel-series --list returns it" ks_list_ok
+ks_hook_ok() {
+	local d=$T/ks out rc r
+	rm -rf "$d"; mkdir -p "$d/modules"
+	printf '# comment\n6.18\n\n7.3\n' > "$d/TESTED-SERIES"
+	for r in 6.18.55-2-cachyos-lts 7.3.0-4-cachyos 7.30.1-1 7.4.0-1-cachyos custom; do
+		mkdir -p "$d/modules/$r"; : > "$d/modules/$r/vmlinuz"
+	done
+	# A modules directory without a kernel image (left behind by a removed kernel).
+	mkdir -p "$d/modules/7.1.9-1-leftover"
+	out=$(bash "$KS" --hook --series-file "$d/TESTED-SERIES" --modules-root "$d/modules" 2>&1 >/dev/null)
+	rc=$?
+	[ "$rc" = 0 ] || { echo "exit $rc"; return 1; }
+	[ -z "$(bash "$KS" --hook --series-file "$d/TESTED-SERIES" --modules-root "$d/modules" 2>/dev/null)" ] ||
+		{ echo "notes on stdout"; return 1; }
+	[ "$(grep -c '^macbook91-facetimehd: note: ' <<<"$out")" = 3 ] || { echo "$out"; return 1; }
+	grep -qF 'not tested on Linux 7.4 (kernel 7.4.0-1-cachyos); tested series: 6.18, 7.3.' <<<"$out" &&
+	grep -qF 'not tested on Linux 7.30 (kernel 7.30.1-1)' <<<"$out" &&
+	grep -qF 'not tested on kernel custom;' <<<"$out" &&
+	grep -qF '  If the camera misbehaves on that kernel, boot the LTS kernel.' <<<"$out" &&
+	! grep -qE '6\.18\.55|7\.3\.0|leftover' <<<"$out" || { echo "$out"; return 1; }
+}
+check "kernel-series --hook: one note per installed kernel of an untested series, exit 0" ks_hook_ok
+ks_err_ok() {
+	local rc
+	bash "$KS" --list --series-file "$T/missing" >/dev/null 2>&1; rc=$?
+	[ "$rc" = 1 ] || { echo "missing list: exit $rc"; return 1; }
+	printf '7.3.0\n' > "$T/bad-series"
+	bash "$KS" --list --series-file "$T/bad-series" >/dev/null 2>&1; rc=$?
+	[ "$rc" = 1 ] || { echo "malformed list: exit $rc"; return 1; }
+	bash "$KS" --bogus >/dev/null 2>&1; rc=$?
+	[ "$rc" = 2 ] || { echo "bad argument: exit $rc"; return 1; }
+}
+check "kernel-series: exit 1 for a missing or malformed list, 2 for a bad argument" ks_err_ok
+ks_hookfile_ok() {
+	local h=tools/macbook91-facetimehd-series.hook
+	grep -qx 'When = PostTransaction' "$h" &&
+	grep -qx 'Target = usr/lib/modules/\*/vmlinuz' "$h" &&
+	grep -qx 'Target = usr/src/macbook91-facetimehd-\*/dkms.conf' "$h" &&
+	grep -qx 'Exec = /usr/lib/macbook91-facetimehd/kernel-series --hook' "$h" &&
+	! grep -q 'AbortOnFail' "$h" &&
+	! grep -q 'BUILD_EXCLUSIVE' packaging/overlay/dkms.conf
+}
+check "series hook runs after the transaction, cannot abort it; dkms.conf builds for every kernel" ks_hookfile_ok
+
 # --- provenance --------------------------------------------------------------------
 lock_ok() {
 	local p n want have rc=0
@@ -226,6 +281,9 @@ if [ -d build/upstream/.git ] || git ls-remote -q "$(awk '$1 == "driver.repo" {p
 		! grep -E '\.(ko|o)$|firmware\.bin$|_01XX\.dat$|AppleCamera' "$T/list" &&
 		grep -q "macbook91-facetimehd-$VERSION/$MOD_DIR/SOURCES.sha256$" "$T/list" &&
 		grep -q "macbook91-facetimehd-$VERSION/tools/macbook91-facetimehd-verify$" "$T/list" &&
+		grep -q "macbook91-facetimehd-$VERSION/tools/macbook91-facetimehd-kernel-series$" "$T/list" &&
+		grep -q "macbook91-facetimehd-$VERSION/tools/macbook91-facetimehd-series.hook$" "$T/list" &&
+		grep -q "macbook91-facetimehd-$VERSION/$MOD_DIR/TESTED-SERIES$" "$T/list" &&
 		grep -q "macbook91-facetimehd-$VERSION/LICENSE$" "$T/list" &&
 		grep -q "macbook91-facetimehd-$VERSION/LICENSES/GPL-2.0-only.txt$" "$T/list" &&
 		grep -q "macbook91-facetimehd-$VERSION/LICENSES/GPL-2.0-or-later.txt$" "$T/list" &&
@@ -240,9 +298,16 @@ if [ -d build/upstream/.git ] || git ls-remote -q "$(awk '$1 == "driver.repo" {p
 		[ -x "$T/root/usr/bin/macbook91-facetimehd-verify" ] &&
 		[ ! -e "$T/root/usr/lib/firmware" ] &&
 		[ -r "$T/root/usr/share/doc/macbook91-facetimehd/README.md" ] &&
-		(cd "$s" && sha256sum --quiet -c SOURCES.sha256)
+		(cd "$s" && sha256sum --quiet -c SOURCES.sha256) || return 1
+		# The installed note reads the installed list; the hook calls the installed script.
+		local k=$T/root/usr/lib/macbook91-facetimehd/kernel-series
+		[ -x "$k" ] &&
+		grep -qx "SERIES_FILE=/usr/src/macbook91-facetimehd-$VERSION/TESTED-SERIES" "$k" &&
+		cmp -s "$s/TESTED-SERIES" packaging/overlay/TESTED-SERIES &&
+		[ "$(bash "$k" --list --series-file "$s/TESTED-SERIES")" = "$(bash "$KS" --list --series-file packaging/overlay/TESTED-SERIES)" ] &&
+		cmp -s "$T/root/usr/share/libalpm/hooks/71-macbook91-facetimehd-series.hook" tools/macbook91-facetimehd-series.hook
 	}
-	check "make install from the tarball: DKMS tree with version, tools, doc" install_ok
+	check "make install from the tarball: DKMS tree with version, tools, series note and hook, doc" install_ok
 	if [ -r "dist/macbook91-facetimehd-$VERSION.tar" ] && [ -z "$(git status --porcelain --untracked-files=no)" ]; then
 		pin_ok() {
 			[ "$(sed -n "s/^sha256sums=('\([0-9a-f]*\)').*/\1/p" packaging/arch/PKGBUILD)" = \

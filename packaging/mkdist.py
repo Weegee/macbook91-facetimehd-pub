@@ -16,6 +16,7 @@ Contents, under NAME-VERSION/, laid out as in the repository so the Makefile's
                               lists are taken, each checked against it, plus
                               SOURCES.sha256 and dkms.conf
   tools/macbook91-facetimehd-verify, tools/macbook91-facetimehd-fetch-firmware,
+  tools/macbook91-facetimehd-kernel-series, tools/macbook91-facetimehd-series.hook,
   Makefile, VERSION, LICENSE,
   LICENSES/GPL-2.0-only.txt, LICENSES/GPL-2.0-or-later.txt, README.md
 
@@ -50,6 +51,8 @@ ARTIFACTS = ("*.o", "*.ko", "*.mod", "*.mod.c", "*.symvers", "*.order", ".*.cmd"
 EXTRA = (
     "tools/macbook91-facetimehd-verify",
     "tools/macbook91-facetimehd-fetch-firmware",
+    "tools/macbook91-facetimehd-kernel-series",
+    "tools/macbook91-facetimehd-series.hook",
     "Makefile",
     "VERSION",
     "LICENSE",

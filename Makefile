@@ -51,6 +51,14 @@ install:
 		"$(DESTDIR)$(PREFIX)/bin/macbook91-facetimehd-verify"
 	install -Dm755 tools/macbook91-facetimehd-fetch-firmware \
 		"$(DESTDIR)$(PREFIX)/bin/macbook91-facetimehd-fetch-firmware"
+
+	# The note after a pacman transaction about installed kernels of an
+	# untested series; the script reads TESTED-SERIES in the DKMS tree above.
+	install -Dm755 tools/macbook91-facetimehd-kernel-series \
+		"$(DESTDIR)$(PREFIX)/lib/$(NAME)/kernel-series"
+	sed -i "s/@PKGVER@/$(VERSION)/" "$(DESTDIR)$(PREFIX)/lib/$(NAME)/kernel-series"
+	install -Dm644 tools/macbook91-facetimehd-series.hook \
+		"$(DESTDIR)$(PREFIX)/share/libalpm/hooks/71-$(NAME)-series.hook"
 	install -Dm644 README.md "$(DESTDIR)$(PREFIX)/share/doc/$(NAME)/README.md"
 
 	find "$(SRCDIR)" -type f -exec chmod 644 {} +

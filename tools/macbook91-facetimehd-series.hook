@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# After a transaction that installs or upgrades a kernel or this package, print
+# a short note for each installed kernel of a series the camera driver has not
+# been tested on (kernel-series --hook). It builds nothing and never fails the
+# transaction: DKMS builds the driver for every kernel. Installed as
+# 71-macbook91-facetimehd-series.hook, which sorts after 70-dkms-install.hook,
+# so the note follows DKMS's own output.
+
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Path
+Target = usr/lib/modules/*/vmlinuz
+Target = usr/src/macbook91-facetimehd-*/dkms.conf
+
+[Action]
+Description = Checking installed kernels against the series macbook91-facetimehd is tested on...
+When = PostTransaction
+Exec = /usr/lib/macbook91-facetimehd/kernel-series --hook

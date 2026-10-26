@@ -1,4 +1,4 @@
-Structure version: 20261021.01
+Structure version: 20261026.01
 
 Layout rules for this repository. The README describes the same directories
 for a reader; this file is the rule.
@@ -22,7 +22,10 @@ packaging/          fetch-upstream.sh, mkdist.py (reproducible source
                     `make arch-pkg-dev`), upstream.lock (tracked: the
                     provenance record, promoted into release/<pkgver>/).
 packaging/overlay/  the module Kbuild, Makefile and dkms.conf that replace
-                    upstream's Makefile and dkms.conf in the assembled tree.
+                    upstream's Makefile and dkms.conf in the assembled tree,
+                    and TESTED-SERIES: the one list of kernel series (X.Y)
+                    the driver is tested on. DKMS builds for every kernel;
+                    a series joins the list only after a verify PASS on it.
 packaging/arch/     PKGBUILD (macbook91-facetimehd-dkms), .SRCINFO and the
                     install scriptlet. Not part of the source tarball, which is what
                     lets the PKGBUILD pin the tarball's checksum.
@@ -46,7 +49,12 @@ LICENSE, LICENSES/  LICENSE is the GPL-3.0 text (same file as
                     "Provenance and licensing" maps every path. A new license
                     needs its text in LICENSES/ and a row in that table.
 tools/              macbook91-facetimehd-verify and macbook91-facetimehd-fetch-firmware
-                    are packaged to /usr/bin. dev-*.sh
+                    are packaged to /usr/bin. macbook91-facetimehd-kernel-series
+                    (the only reader of TESTED-SERIES) is packaged to
+                    /usr/lib/macbook91-facetimehd/kernel-series, and
+                    macbook91-facetimehd-series.hook, the pacman hook that
+                    calls it, to /usr/share/libalpm/hooks/ as
+                    71-macbook91-facetimehd-series.hook. dev-*.sh
                     are development helpers for the maintainer's test machine
                     and are not packaged.
 tests/              run-tests.sh: hermetic, no root, no hardware. Hardware

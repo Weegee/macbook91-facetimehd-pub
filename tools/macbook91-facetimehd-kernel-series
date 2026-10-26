@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# macbook91-facetimehd-kernel-series: on which Linux kernel series the camera
+# driver has been tested, and a short note after a pacman transaction for every
+# installed kernel of another series.
+#
+# DKMS builds the driver for every kernel (dkms.conf sets no
+# BUILD_EXCLUSIVE_KERNEL), so this builds and blocks nothing. The one list of
+# tested series is TESTED-SERIES in the installed DKMS source tree; this script
+# is its only reader. The pacman hook 71-macbook91-facetimehd-series.hook calls
+# --hook. Installed as /usr/lib/macbook91-facetimehd/kernel-series.
+#
+# A kernel belongs to series X.Y when its release starts with "X.Y.".
+#
+#   kernel-series --list   the tested series, space-separated, on stdout
+#   kernel-series --hook   a note on stderr for each installed kernel of an
+#                          untested series; exit 0 with or without notes
+#
+#   --series-file FILE     the list to read (default: the installed source tree)
+#   --modules-root DIR     where --hook looks for kernels (default /usr/lib/modules)
+#
+# Exit 1: the list is missing, unreadable or malformed. Exit 2: bad arguments.
+set -u
+
+SERIES_FILE=/usr/src/macbook91-facetimehd-@PKGVER@/TESTED-SERIES
+MODULES_ROOT=/usr/lib/modules
+MODE=''
+
+fail() { printf 'macbook91-facetimehd: error: %s\n' "$*" >&2; exit 1; }
+usage() {
+	printf 'macbook91-facetimehd: error: %s\n' "$*" >&2
+	printf 'usage: kernel-series --list|--hook [--series-file FILE] [--modules-root DIR]\n' >&2
+	exit 2
+}
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--list|--hook) MODE=${1#--}; shift ;;
+		--series-file)
+			[ $# -ge 2 ] || usage "--series-file needs a file"
+			SERIES_FILE=$2; shift 2 ;;
+		--modules-root)
+			[ $# -ge 2 ] || usage "--modules-root needs a directory"
+			MODULES_ROOT=$2; shift 2 ;;
+		*) usage "unknown argument: $1" ;;
+	esac
+done
+[ -n "$MODE" ] || usage "no mode: use --list or --hook"
+
+[ -r "$SERIES_FILE" ] || fail "cannot read the list of tested kernel series, $SERIES_FILE"
+SERIES=()
+while read -r s; do
+	case "$s" in ''|'#'*) continue ;; esac
+	[[ $s =~ ^[0-9]+\.[0-9]+$ ]] || fail "malformed series '$s' in $SERIES_FILE"
+	SERIES+=("$s")
+done < "$SERIES_FILE"
+[ "${#SERIES[@]}" -gt 0 ] || fail "$SERIES_FILE lists no series"
+
+tested() { # RELEASE -> exit 0 when it belongs to a tested series
+	local s
+	for s in "${SERIES[@]}"; do
+		case "$1" in "$s".*) return 0 ;; esac
+	done
+	return 1
+}
+
+case "$MODE" in
+	list)
+		printf '%s\n' "${SERIES[*]}"
+		;;
+	hook)
+		list=$(printf '%s, ' "${SERIES[@]}")
+		list=${list%, }
+		for d in "$MODULES_ROOT"/*/; do
+			[ -e "$d/vmlinuz" ] || continue
+			rel=$(basename "$d")
+			tested "$rel" && continue
+			if [[ $rel =~ ^([0-9]+\.[0-9]+)\. ]]; then
+				what="Linux ${BASH_REMATCH[1]} (kernel $rel)"
+			else
+				what="kernel $rel"
+			fi
+			printf 'macbook91-facetimehd: note: the camera driver is not tested on %s; tested series: %s.\n' \
+				"$what" "$list" >&2
+			printf '  If the camera misbehaves on that kernel, boot the LTS kernel.\n' >&2
+		done
+		;;
+esac
+exit 0

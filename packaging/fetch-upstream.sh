@@ -45,6 +45,7 @@ done
 install -m644 "$ROOT/packaging/overlay/Makefile" "$OUT/Makefile"
 install -m644 "$ROOT/packaging/overlay/Kbuild" "$OUT/Kbuild"
 install -m644 "$ROOT/packaging/overlay/dkms.conf" "$OUT/dkms.conf"
+install -m644 "$ROOT/packaging/overlay/TESTED-SERIES" "$OUT/TESTED-SERIES"
 
 # Integrity record checked by the Makefile's check target before every build.
 # dkms.conf is left out: make install writes the version into it.
