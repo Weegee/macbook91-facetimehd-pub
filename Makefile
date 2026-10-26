@@ -36,7 +36,7 @@ check:
 	tests/run-tests.sh
 
 install:
-	@test -r "$(MODULE)/SOURCES.sha256" || { echo "install: $(MODULE) is not assembled; run make dist" >&2; exit 1; }
+	@test -r "$(MODULE)/SOURCES.sha256" || { printf '%s\n' "make install: error: $(MODULE) is not assembled" "  Assemble it first: make dist" >&2; exit 1; }
 	install -dm755 "$(SRCDIR)"
 	cp -a "$(MODULE)/." "$(SRCDIR)/"
 
@@ -47,10 +47,13 @@ install:
 	# dkms.conf carries the version from the package, not a hardcoded string.
 	sed -i "s/@PKGVER@/$(VERSION)/" "$(SRCDIR)/dkms.conf"
 
+	# The tools print the package version for --version.
 	install -Dm755 tools/macbook91-facetimehd-verify \
 		"$(DESTDIR)$(PREFIX)/bin/macbook91-facetimehd-verify"
+	sed -i "s/@PKGVER@/$(VERSION)/" "$(DESTDIR)$(PREFIX)/bin/macbook91-facetimehd-verify"
 	install -Dm755 tools/macbook91-facetimehd-fetch-firmware \
 		"$(DESTDIR)$(PREFIX)/bin/macbook91-facetimehd-fetch-firmware"
+	sed -i "s/@PKGVER@/$(VERSION)/" "$(DESTDIR)$(PREFIX)/bin/macbook91-facetimehd-fetch-firmware"
 
 	# The note after a pacman transaction about installed kernels of an
 	# untested series; the script reads TESTED-SERIES in the DKMS tree above.
@@ -77,8 +80,8 @@ arch-pkg: dist
 	@want=$$(sed -n "s/^sha256sums=('\([0-9a-f]*\)').*/\1/p" packaging/arch/PKGBUILD); \
 	have=$$(cut -d' ' -f1 dist/$(NAME)-$(VERSION).tar.sha256); \
 	if [ "$$want" != "$$have" ]; then \
-		echo "arch-pkg: PKGBUILD sha256sums is $$want, tarball is $$have" >&2; \
-		echo "arch-pkg: set sha256sums to $$have, make srcinfo, commit (--amend), rerun" >&2; \
+		echo "make arch-pkg: error: PKGBUILD pins sha256sums $$want, but the tarball is $$have" >&2; \
+		echo "  Set sha256sums to $$have in packaging/arch/PKGBUILD, run make srcinfo, commit with --amend and run make arch-pkg again." >&2; \
 		exit 1; \
 	fi
 	$(MAKE) --no-print-directory _arch-build

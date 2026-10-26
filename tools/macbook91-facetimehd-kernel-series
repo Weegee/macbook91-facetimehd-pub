@@ -19,20 +19,76 @@
 #
 #   --series-file FILE     the list to read (default: the installed source tree)
 #   --modules-root DIR     where --hook looks for kernels (default /usr/lib/modules)
+#   -h, --help             the full help on stdout
+#   -V, --version          name and version on stdout
 #
 # Exit 1: the list is missing, unreadable or malformed. Exit 2: bad arguments.
+#
+# Message lines keep the prefix "macbook91-facetimehd:" because pacman prints
+# them inside its transaction output (hook). The text of the --hook note is
+# read by people and by tests: keep it stable.
 set -u
 
-SERIES_FILE=/usr/src/macbook91-facetimehd-@PKGVER@/TESTED-SERIES
+# The Makefile substitutes the version on install; from a checkout it is read
+# from ../VERSION.
+PKGVER=@PKGVER@
+case $PKGVER in
+	@*@) PKGVER=$(cat "$(dirname "$0")/../VERSION" 2>/dev/null) || PKGVER=unknown ;;
+esac
+SERIES_FILE=/usr/src/macbook91-facetimehd-$PKGVER/TESTED-SERIES
 MODULES_ROOT=/usr/lib/modules
 MODE=''
+CMD=/usr/lib/macbook91-facetimehd/kernel-series
 
 fail() { printf 'macbook91-facetimehd: error: %s\n' "$*" >&2; exit 1; }
-usage() {
+usage() { # MESSAGE
 	printf 'macbook91-facetimehd: error: %s\n' "$*" >&2
-	printf 'usage: kernel-series --list|--hook [--series-file FILE] [--modules-root DIR]\n' >&2
+	printf 'Usage: %s (--list|--hook) [--series-file FILE] [--modules-root DIR]\n' "$CMD" >&2
+	printf 'Example: %s --list\n' "$CMD" >&2
+	printf 'Help: %s --help\n' "$CMD" >&2
 	exit 2
 }
+usage_full() {
+	cat <<EOF
+Usage: $CMD (--list|--hook) [--series-file FILE] [--modules-root DIR]
+
+Reports on which Linux kernel series the macbook91-facetimehd camera driver
+has been tested. The pacman hook calls it after kernel and driver transactions.
+It builds and blocks nothing.
+
+Examples:
+  $CMD --list    the tested series, for example "6.18 7.2"
+  $CMD --hook    a note for each installed kernel of an untested series
+
+Options:
+      --list               print the tested series, space-separated, on stdout
+      --hook               print a note on stderr for each installed kernel of an
+                           untested series; exit 0 with or without notes
+      --series-file FILE   the list to read (default: TESTED-SERIES in the
+                           installed DKMS source tree)
+      --modules-root DIR   where --hook looks for kernels (default /usr/lib/modules)
+  -h, --help               this help
+  -V, --version            version
+
+Files:
+  /usr/src/macbook91-facetimehd-VERSION/TESTED-SERIES   the list of tested series
+
+Exit status:
+  0  success, with or without notes
+  1  the list is missing, unreadable or malformed
+  2  usage error
+
+Docs and bug reports: https://github.com/Weegee/macbook91-facetimehd-pub
+EOF
+}
+
+# -h and -V win over every other argument (HIL-1).
+for a in "$@"; do
+	case $a in
+		-h|--help) usage_full; exit 0 ;;
+		-V|--version) echo "macbook91-facetimehd-kernel-series (macbook91-facetimehd-dkms) $PKGVER"; exit 0 ;;
+	esac
+done
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -43,10 +99,10 @@ while [ $# -gt 0 ]; do
 		--modules-root)
 			[ $# -ge 2 ] || usage "--modules-root needs a directory"
 			MODULES_ROOT=$2; shift 2 ;;
-		*) usage "unknown argument: $1" ;;
+		*) usage "unknown argument '$1'" ;;
 	esac
 done
-[ -n "$MODE" ] || usage "no mode: use --list or --hook"
+[ -n "$MODE" ] || usage "no mode given; use --list or --hook"
 
 [ -r "$SERIES_FILE" ] || fail "cannot read the list of tested kernel series, $SERIES_FILE"
 SERIES=()

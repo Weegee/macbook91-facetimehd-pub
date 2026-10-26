@@ -14,11 +14,31 @@
 # use; whoever runs this script downloads and uses it on their own
 # responsibility. The script asks for an explicit "yes" first (--yes skips it).
 #
-# usage: macbook91-facetimehd-fetch-firmware [--yes] [OUTDIR [KEEPDIR]]
-#   OUTDIR   receives facetimehd/firmware.bin and facetimehd/*_01XX.dat
-#            (default /usr/lib/firmware, which needs root)
-#   KEEPDIR  optional: keep AppleCameraInterface/AppleCameraAssistant there
+# usage: macbook91-facetimehd-fetch-firmware [OPTIONS] [OUTDIR [KEEPDIR]]
+#   -o, --output DIR   receives facetimehd/firmware.bin and facetimehd/*_01XX.dat
+#                      (default /usr/lib/firmware, which needs root)
+#   --keep DIR         keep AppleCameraInterface/AppleCameraAssistant there
+#   -y, --yes          accept the notice without asking
+#   --no-input         never ask; without --yes this fails with exit 2
+#   -q, --quiet        errors only
+#   --timeout SEC      give up when a download stalls for SEC seconds (30)
+#   -h, --help, -V, --version
+# OUTDIR and KEEPDIR as positional arguments are the same as --output and
+# --keep; Abweichung von ARG-3: they stay because earlier documentation and
+# scripts call the tool that way.
+#
+# Exit status: 0 done, 1 error or declined, 2 usage error or a question without
+# a terminal, 130 and 143 after SIGINT and SIGTERM. Messages and progress go to
+# stderr; the tool prints no result on stdout.
 set -euo pipefail
+
+PROG=macbook91-facetimehd-fetch-firmware
+# The Makefile substitutes the version on install; from a checkout it is read
+# from ../VERSION.
+PKGVER=@PKGVER@
+case $PKGVER in
+	@*@) PKGVER=$(cat "$(dirname "$0")/../VERSION" 2>/dev/null) || PKGVER=unknown ;;
+esac
 
 URL=https://updates.cdn-apple.com/2019/cert/041-90765-20191011-837e856d-b522-4865-b64c-641048ed77c4/macOSUpdCombo10.12.6.dmg
 H_DRV=e959244db1e0561f6d5590c8e5000a36816c592e2820bafe89af0bea75556aca
@@ -29,61 +49,229 @@ FW_OFF=81920 FW_LEN=602903
 SETFILES="
 1675 430080 18044 b7a38aef2755721bb28c92d84a15654b17e9fb3b0a0f088a384a981fc8fe16d6
 "
+DEFAULT_OUT=/usr/lib/firmware
+ISSUES=https://github.com/Weegee/macbook91-facetimehd-pub/issues
 
-YES=0
-case ${1:-} in
---yes) YES=1; shift ;;
--h|--help) sed -n '3,20p' "$0"; exit 0 ;;
--*) sed -n '3,20p' "$0" >&2; exit 2 ;;
-esac
-OUT=${1:-/usr/lib/firmware}/facetimehd KEEP=${2:-}
+usage_full() {
+	cat <<EOF
+Usage: $PROG [OPTIONS] [OUTDIR [KEEPDIR]]
+
+Downloads Apple's camera firmware 5.60.0 and the sensor set file 1675 for the
+FaceTime HD camera from Apple's macOS 10.12.6 combo update (about 18 MB, HTTPS
+range requests), checks every file against a pinned SHA256 and writes them to
+OUTDIR/facetimehd. The firmware is Apple's software under Apple's license
+terms; the command asks for an explicit "yes" first.
+
+Examples:
+  sudo $PROG           read the notice, type yes, install
+  sudo $PROG --yes     the same without the question
+  $PROG -y -o ~/fw     write to ~/fw/facetimehd instead of $DEFAULT_OUT
+
+Options:
+  -o, --output DIR   directory that receives facetimehd/ (default $DEFAULT_OUT,
+                     which needs root)
+      --keep DIR     also keep AppleCameraInterface and AppleCameraAssistant in DIR
+  -y, --yes          accept the notice without asking
+      --no-input     never ask; fails with exit status 2 unless --yes is given
+  -q, --quiet        print errors only
+      --timeout SEC  give up when a download stalls for SEC seconds (default 30)
+  -h, --help         this help
+  -V, --version      version
+
+OUTDIR and KEEPDIR as positional arguments mean the same as --output and --keep.
+
+Files:
+  OUTDIR/facetimehd/firmware.bin    firmware 5.60.0
+  OUTDIR/facetimehd/1675_01XX.dat   sensor set file 1675
+
+Exit status:
+  0    files written
+  1    error, or the notice was not accepted
+  2    usage error, or a question without a terminal (use --yes)
+  130  interrupted by SIGINT (143 by SIGTERM)
+
+Docs and bug reports: https://github.com/Weegee/macbook91-facetimehd-pub
+EOF
+}
+
+# Message helpers: "prog: error: first line" plus indented follow-up lines.
+err() { # FIRST [MORE...]
+	printf '%s: error: %s\n' "$PROG" "$1" >&2
+	shift
+	local l
+	for l in "$@"; do printf '  %s\n' "$l" >&2; done
+}
+die() { err "$@"; exit 1; }
+usage_error() { # FIRST [MORE...]; short help, exit 2
+	err "$@"
+	printf 'Usage: %s [OPTIONS] [OUTDIR [KEEPDIR]]\n' "$PROG" >&2
+	printf 'Example: sudo %s\n' "$PROG" >&2
+	printf 'Help: %s --help\n' "$PROG" >&2
+	exit 2
+}
+QUIET=0
+say() { [ "$QUIET" = 1 ] || printf '%s\n' "$*" >&2; }
+
+# -h and -V win over every other argument (HIL-1).
+for a in "$@"; do
+	case $a in
+		--) break ;;
+		-h|--help) usage_full; exit 0 ;;
+		-V|--version) echo "$PROG $PKGVER"; exit 0 ;;
+	esac
+done
+
+YES=0 NOINPUT=0 TIMEOUT=30 OUTOPT='' KEEPOPT='' POS=()
+need_value() { [ "$#" -ge 2 ] || usage_error "option '$1' needs a value"; }
+while [ $# -gt 0 ]; do
+	case $1 in
+		-y|--yes) YES=1; shift ;;
+		--no-input) NOINPUT=1; shift ;;
+		-q|--quiet) QUIET=1; shift ;;
+		-o|--output) need_value "$@"; OUTOPT=$2; shift 2 ;;
+		--output=*) OUTOPT=${1#*=}; shift ;;
+		--keep) need_value "$@"; KEEPOPT=$2; shift 2 ;;
+		--keep=*) KEEPOPT=${1#*=}; shift ;;
+		--timeout) need_value "$@"; TIMEOUT=$2; shift 2 ;;
+		--timeout=*) TIMEOUT=${1#*=}; shift ;;
+		--) shift; POS+=("$@"); break ;;
+		-?*) usage_error "unknown option '$1'" ;;
+		*) POS+=("$1"); shift ;;
+	esac
+done
+
+# Check all input before anything is downloaded or changed (EIN-6).
+[ "${#POS[@]}" -le 2 ] || usage_error "too many arguments: ${POS[*]}"
+if [ -n "$OUTOPT" ] && [ "${#POS[@]}" -ge 1 ]; then
+	usage_error "the output directory is given twice: '$OUTOPT' and '${POS[0]}'" "Use either --output DIR or OUTDIR."
+fi
+if [ -n "$KEEPOPT" ] && [ "${#POS[@]}" -ge 2 ]; then
+	usage_error "the keep directory is given twice: '$KEEPOPT' and '${POS[1]}'" "Use either --keep DIR or KEEPDIR."
+fi
+[[ $TIMEOUT =~ ^[0-9]+$ ]] && [ "$TIMEOUT" -ge 1 ] && [ "$TIMEOUT" -le 3600 ] ||
+	usage_error "--timeout $TIMEOUT is out of range 1 to 3600 seconds"
+OUT=${OUTOPT:-${POS[0]:-$DEFAULT_OUT}}/facetimehd
+KEEP=${KEEPOPT:-${POS[1]:-}}
+
+missing=() pkgs=()
+for c in curl xzcat gzip sha256sum dd; do
+	command -v "$c" >/dev/null && continue
+	missing+=("$c")
+	case $c in xzcat) pkgs+=(xz) ;; sha256sum|dd) pkgs+=(coreutils) ;; *) pkgs+=("$c") ;; esac
+done
+if [ "${#missing[@]}" -gt 0 ]; then
+	mapfile -t pkgs < <(printf '%s\n' "${pkgs[@]}" | sort -u)
+	what='required tools are'
+	[ "${#missing[@]}" != 1 ] || what='a required tool is'
+	die "$what missing: ${missing[*]}" "Install it: sudo pacman -S ${pkgs[*]}"
+fi
+
+writable() { # PATH -> 0 when PATH or its nearest existing parent can be written
+	local d=$1
+	while [ ! -e "$d" ]; do d=$(dirname "$d"); done
+	[ -d "$d" ] && [ -w "$d" ] && [ -x "$d" ]
+}
+writable "$OUT" || die "cannot write to $OUT: permission denied" \
+	"Run it as root: sudo $PROG" \
+	"Or choose a directory you can write to: $PROG -o DIR"
+[ -z "$KEEP" ] || writable "$KEEP" || die "cannot write to $KEEP: permission denied" \
+	"Choose a directory you can write to: $PROG --keep DIR"
+
 if [ "$YES" != 1 ]; then
-	cat <<'MSG'
-
-  IMPORTANT: this downloads Apple software and extracts Apple's firmware
-
-  The FaceTime HD camera needs Apple's firmware. This script downloads about
+	if [ "$NOINPUT" = 1 ] || [ ! -t 0 ] || [ ! -t 2 ]; then
+		why='there is no terminal'
+		[ "$NOINPUT" != 1 ] || why='--no-input is set'
+		err "confirmation needed, but $why" \
+			"--yes confirms that you download Apple's firmware from Apple's servers" \
+			"under Apple's license terms and use it at your own responsibility." \
+			"Nothing was downloaded. Run it again with --yes, or from a terminal to read the notice first."
+		exit 2
+	fi
+	cat >&2 <<EOF
+$PROG: note: this downloads Apple software and extracts Apple's firmware
+  The FaceTime HD camera needs Apple's firmware. This command downloads about
   18 MB of Apple's macOS 10.12.6 combo update from Apple's servers
   (updates.cdn-apple.com) and extracts the camera firmware from it.
 
   The firmware is Apple's proprietary software under Apple's license terms.
-  This project does not distribute it and has NOT verified whether Apple's
+  This project does not distribute it and has not verified whether Apple's
   terms allow this use. You download and use it on your own account and at
   your own responsibility.
 
-MSG
-	printf '  Type yes to continue: '
-	read -r answer </dev/tty || answer=
-	[ "$answer" = yes ] || { echo "aborted, nothing downloaded" >&2; exit 1; }
+EOF
+	# Abweichung von EIN-3: the answer is the typed word "yes", not [y/N]; the
+	# consent is legal in kind (Apple's license terms), so a single key is too
+	# light. Anything else, including Enter and Ctrl+D, declines.
+	read -r -p 'Type yes to continue: ' answer || { answer=''; echo >&2; }
+	[ "${answer,,}" = yes ] || { printf '%s: cancelled, nothing downloaded\n' "$PROG" >&2; exit 1; }
 fi
-for c in curl xzcat gzip sha256sum dd; do command -v $c >/dev/null || { echo "missing: $c" >&2; exit 1; }; done
 
-T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
-get() { curl -fsS --proto '=https' --tlsv1.2 -r "$1" "$URL" | xzcat -q > "$T/$2"; }
-check() { [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$2" ] || { echo "sha256 mismatch: $1" >&2; exit 1; }; }
+T=''
+cleanup() { [ -z "$T" ] || rm -rf -- "$T"; T=''; }
+on_signal() { # INT or TERM
+	trap - "$1"
+	printf '\n%s: cancelled\n' "$PROG" >&2
+	# shellcheck disable=SC2046
+	kill $(jobs -p) 2>/dev/null || true
+	cleanup
+	kill -s "$1" "$$"
+}
+trap cleanup EXIT
+trap 'on_signal INT' INT
+trap 'on_signal TERM' TERM
+T=$(mktemp -d)
 
-get 699186570-703316225 c1
-get 703316242-707986973 c2
-get 430282546-439105037 ca
+get() { # RANGE NAME PART
+	say "Downloading part $3 of 3 from updates.cdn-apple.com$( [ "$3" != 1 ] || echo ' (Ctrl+C cancels)')"
+	# In the background so that a signal ends it at once; wait returns its status.
+	curl -fsS --proto '=https' --tlsv1.2 --connect-timeout "$TIMEOUT" --speed-time "$TIMEOUT" --speed-limit 1 \
+		-r "$1" "$URL" 2>"$T/curl.err" | xzcat -q 2>/dev/null > "$T/$2" &
+	wait "$!" || {
+		local why
+		why=$(tail -n 1 "$T/curl.err" 2>/dev/null || true)
+		die "download from updates.cdn-apple.com failed" \
+			"${why:-the downloaded data could not be decompressed (xz)}" \
+			"Check the network connection and run the command again. --timeout SEC changes the ${TIMEOUT} s limit for a stalled download."
+	}
+}
+check() { # FILE SHA256 LABEL
+	[ "$(sha256sum "$1" | cut -d' ' -f1)" = "$2" ] ||
+		die "$3 does not match its pinned SHA256" \
+			"The download is incomplete, or Apple changed the file. Nothing was written to $OUT." \
+			"Run the command again. If it repeats, report it: $ISSUES"
+}
+
+say "Getting the camera firmware from Apple's macOS 10.12.6 combo update (about 18 MB)"
+get 699186570-703316225 c1 1
+get 703316242-707986973 c2 2
+get 430282546-439105037 ca 3
+say "Checking the downloaded files against their pinned SHA256"
 { tail -c 249719 "$T/c1"; head -c 507353 "$T/c2"; } > "$T/AppleCameraInterface"
 head -c $((7477241 + 515632)) "$T/ca" | tail -c 515632 > "$T/AppleCameraAssistant"
-check "$T/AppleCameraInterface" $H_DRV
-check "$T/AppleCameraAssistant" $H_ASST
+check "$T/AppleCameraInterface" $H_DRV AppleCameraInterface
+check "$T/AppleCameraAssistant" $H_ASST AppleCameraAssistant
 
 dd bs=1 skip=$FW_OFF count=$FW_LEN if="$T/AppleCameraInterface" status=none | gzip -dc > "$T/firmware.bin"
-check "$T/firmware.bin" $H_FW
-install -d -m755 "$OUT"
-install -m644 "$T/firmware.bin" "$OUT/firmware.bin"
-
-echo "$SETFILES" | while read -r name off size sum; do
+check "$T/firmware.bin" $H_FW firmware.bin
+names=()
+while read -r name off size sum; do
 	[ -n "$name" ] || continue
-	dd bs=1 skip=$off count=$size if="$T/AppleCameraAssistant" of="$T/$name" status=none
-	check "$T/$name" $sum
+	dd bs=1 skip="$off" count="$size" if="$T/AppleCameraAssistant" of="$T/$name" status=none
+	check "$T/$name" "$sum" "${name}_01XX.dat"
+	names+=("$name")
+done <<< "$SETFILES"
+
+say "Writing the files to $OUT"
+install -d -m755 "$OUT" || die "cannot create $OUT"
+install -m644 "$T/firmware.bin" "$OUT/firmware.bin"
+for name in "${names[@]}"; do
 	install -m644 "$T/$name" "$OUT/${name}_01XX.dat"
 done
 
 if [ -n "$KEEP" ]; then
 	install -d -m700 "$KEEP"
 	install -m600 "$T/AppleCameraInterface" "$T/AppleCameraAssistant" "$KEEP/"
+	say "Kept AppleCameraInterface and AppleCameraAssistant in $KEEP"
 fi
-echo "firmware 5.60.0 and 1675_01XX.dat verified and written to $OUT"
+say "firmware 5.60.0 and 1675_01XX.dat verified and written to $OUT"
+[ "$OUT" != "$DEFAULT_OUT/facetimehd" ] || say "Next: macbook91-facetimehd-verify"

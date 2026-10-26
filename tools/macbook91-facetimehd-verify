@@ -9,7 +9,11 @@
 # is installed. Returns a single PASS/FAIL (exit 0/1).
 #
 # usage: macbook91-facetimehd-verify [--no-capture]
+#        macbook91-facetimehd-verify --help | --version
 #
+# Exit status: 0 PASS, 1 FAIL, 2 usage error, 130 and 143 after SIGINT and
+# SIGTERM. The report (one line per check, then the PASS/FAIL line) is the
+# result and goes to stdout; errors and the cancel message go to stderr.
 set -u
 # NOTE: deliberately no pipefail; checks below use `producer | grep -q`, and
 # grep -q exiting early would turn a match into a failure (macbook91-cs4208
@@ -26,13 +30,83 @@ FW_SUMS="
 b7a38aef2755721bb28c92d84a15654b17e9fb3b0a0f088a384a981fc8fe16d6 1675_01XX.dat
 "
 
-capture=1
-case "${1:-}" in
-	--no-capture) capture=0 ;;
-	-h|--help) sed -n '3,11p' "$0"; exit 0 ;;
-	"") ;;
-	*) echo "unknown option: $1" >&2; exit 2 ;;
+PROG=macbook91-facetimehd-verify
+# The Makefile substitutes the version on install; from a checkout it is read
+# from ../VERSION.
+PKGVER=@PKGVER@
+case $PKGVER in
+	@*@) PKGVER=$(cat "$(dirname "$0")/../VERSION" 2>/dev/null) || PKGVER=unknown ;;
 esac
+
+usage_full() {
+	cat <<EOF
+Usage: $PROG [--no-capture]
+
+Checks the MacBook9,1 FaceTime HD camera after installing or updating
+macbook91-facetimehd-dkms and ends with one PASS or FAIL line. Read-only and
+unprivileged: it changes no setting, loads or unloads nothing and keeps no
+recording.
+
+Examples:
+  $PROG                 full check, including a short capture
+  $PROG --no-capture    skip the capture and the idle power-off check
+
+Options:
+      --no-capture   do not capture frames (the capture needs v4l-utils)
+  -h, --help         this help
+  -V, --version      version
+
+Output:
+  One line per check on stdout, marked PASS, FAIL, WARN or ....
+  The last line is PASS (N warnings) or FAIL (N failed, N warnings).
+
+Exit status:
+  0    PASS, warnings allowed
+  1    at least one check failed
+  2    usage error
+  130  interrupted by SIGINT (143 by SIGTERM)
+
+Docs and bug reports: https://github.com/Weegee/macbook91-facetimehd-pub
+EOF
+}
+
+usage_error() { # MESSAGE [SUGGESTION]
+	printf '%s: error: %s\n' "$PROG" "$1" >&2
+	[ -z "${2:-}" ] || printf 'Did you mean: %s %s\n' "$PROG" "$2" >&2
+	printf 'Usage: %s [--no-capture]\n' "$PROG" >&2
+	printf 'Example: %s --no-capture\n' "$PROG" >&2
+	printf 'Help: %s --help\n' "$PROG" >&2
+	exit 2
+}
+
+# -h and -V win over every other argument (HIL-1).
+for a in "$@"; do
+	case $a in
+		-h|--help) usage_full; exit 0 ;;
+		-V|--version) echo "$PROG $PKGVER"; exit 0 ;;
+	esac
+done
+
+capture=1
+for a in "$@"; do
+	case $a in
+		--no-capture) capture=0 ;;
+		*capture*) usage_error "unknown option '$a'" "--no-capture" ;;
+		-*) usage_error "unknown option '$a'" ;;
+		*) usage_error "unexpected argument '$a'" ;;
+	esac
+done
+
+on_signal() { # INT or TERM
+	trap - "$1"
+	printf '\n%s: cancelled\n' "$PROG" >&2
+	kill -s "$1" "$$"
+}
+trap 'on_signal INT' INT
+trap 'on_signal TERM' TERM
+
+# count N SINGULAR PLURAL: "1 warning", "0 warnings"
+count() { if [ "$1" = 1 ]; then printf '1 %s' "$2"; else printf '%s %s' "$1" "$3"; fi; }
 
 fails=0 warns=0
 pass() { printf '  PASS  %s\n' "$*"; }
@@ -138,7 +212,7 @@ else
 			info "idle power-off not checked (idle_poweroff_ms=$idle is over 30 s)"
 		else
 			# A powered-off chip answers config reads with all ones.
-			sleep $(( idle / 1000 + 2 ))
+			sleep $(( idle / 1000 + 2 )) & wait $!
 			vid=$(od -An -tx2 -N2 "$dev/config" 2>/dev/null | tr -d ' ')
 			[ "$vid" = ffff ] && pass "camera powered off after ${idle} ms idle" \
 				|| warn "camera still powered ${idle} ms after the stream (in use elsewhere?)"
@@ -153,15 +227,15 @@ if log=$(journalctl -k -b -o cat 2>/dev/null); then
 	# The kernel names the module in brackets, e.g. a deprecated workqueue (7.2)
 	wq=$(printf '%s\n' "$log" | grep -cE "^workqueue: .*\[$MOD\]")
 	[ "$bad" = 0 ] && [ "$oops" = 0 ] && [ "$wq" = 0 ] && pass "kernel log: no $MOD errors this boot" \
-		|| warn "kernel log: $bad error lines, $oops warnings, $wq workqueue warnings naming $MOD (journalctl -k -b | grep $MOD)"
+		|| warn "kernel log: $(count "$bad" 'error line' 'error lines'), $(count "$oops" warning warnings), $(count "$wq" 'workqueue warning' 'workqueue warnings') naming $MOD (journalctl -k -b | grep $MOD)"
 else
 	info "kernel log not readable for this user"
 fi
 
 echo
 if [ "$fails" = 0 ]; then
-	echo "PASS ($warns warnings)"
+	echo "PASS ($(count "$warns" warning warnings))"
 	exit 0
 fi
-echo "FAIL ($fails failed, $warns warnings)"
+echo "FAIL ($fails failed, $(count "$warns" warning warnings))"
 exit 1

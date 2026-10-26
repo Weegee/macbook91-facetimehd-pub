@@ -122,13 +122,21 @@ it from Apple:
 sudo macbook91-facetimehd-fetch-firmware
 ```
 
-It asks you to type `yes` first. Then it downloads about 18 MB of Apple's
-macOS 10.12.6 combo update from Apple's server (updates.cdn-apple.com) by HTTP
-range requests, checks every piece against a pinned SHA256, executes nothing it
+It asks you to type `yes` first. That needs a terminal: in a script without
+one it stops with exit status 2 and tells you to pass `--yes`, which says you
+have read Apple's terms. Then it downloads about 18 MB of Apple's macOS 10.12.6
+combo update from Apple's server (updates.cdn-apple.com) by HTTP range
+requests, checks every piece against a pinned SHA256, executes nothing it
 downloaded and writes firmware 5.60.0 and the sensor set file 1675 to
-`/usr/lib/firmware/facetimehd/`. pacman does not track those two files; remove
-them yourself with `sudo rm -r /usr/lib/firmware/facetimehd` when you no longer
-want them. The package's install message says the same.
+`/usr/lib/firmware/facetimehd/`. Nothing is written unless every piece
+matches. pacman does not track those two files; remove them yourself with
+`sudo rm -r /usr/lib/firmware/facetimehd` when you no longer want them. The
+package's install message says the same.
+
+Progress goes to stderr; `-q` silences it. A stalled download ends after 30 s
+without data (`--timeout SEC` changes that). `-o DIR` writes to `DIR/facetimehd`
+instead, `--keep DIR` also keeps the two extracted Apple files there, and
+`--help` lists the rest.
 
 Other distributions, or if the download stops working: the extractor of
 patjak/facetimehd-firmware (`make && sudo make install`, commit 60ee212 or
@@ -178,12 +186,15 @@ echo 'options macbook91_facetimehd idle_poweroff_ms=-1' | sudo tee /etc/modprobe
 
 - `macbook91-facetimehd-verify` (packaged): one PASS/FAIL over package,
   firmware, DKMS build, loaded module identity, driver binding, a 60-frame
-  capture and idle power-off. Read-only, no root.
+  capture and idle power-off. Read-only, no root. The report goes to stdout,
+  the last line is `PASS (N warnings)` or `FAIL (N failed, N warnings)`;
+  `--no-capture` skips the capture, `--help` and `--version` do what they say.
 - `/usr/lib/macbook91-facetimehd/kernel-series` with the pacman hook
   `71-macbook91-facetimehd-series.hook` (packaged): after a transaction that
   installs or upgrades a kernel or this package, a note for every installed
   kernel whose series is not in `TESTED-SERIES`. It builds and blocks nothing.
-- `tools/dev-*.sh`: helpers used while developing, run on the test machine.
+- `tools/dev-*.sh`: helpers used while developing, run on the test machine
+  with sudo. Each has `--help`.
 
 ## What is proven, and what is not
 
