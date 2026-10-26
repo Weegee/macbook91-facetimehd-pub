@@ -6,14 +6,56 @@
 # upstream driver into build/upstream for the first time.
 #
 # Prints one line per check and a summary "N passed, N failed, N blocked";
-# exit status 1 if anything failed. Blocked rows need the machine or a
-# missing tool and are named, never counted as passed.
+# exit status 1 if anything failed, 2 for a usage error. Blocked rows need the
+# machine or a missing tool and are named, never counted as passed. The row
+# format and the summary line are parsed by the release checks: keep them.
 #
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1
 VERSION=$(cat VERSION)
+PROG=tests/run-tests.sh
+
+usage_full() {
+	cat <<EOF
+Usage: $PROG
+
+Runs the hermetic tests of macbook91-facetimehd: no root, no camera, no
+suspend. The network is used only when packaging/fetch-upstream.sh has to
+clone the upstream driver for the first time. It takes a few minutes.
+
+Example:
+  make check                 the same, through the Makefile
+
+Options:
+  -h, --help     this help
+  -V, --version  version
+
+Output:
+  One line per check, marked PASS, FAIL or BLOCKED, then the summary line
+  "N passed, N failed, N blocked". A blocked row needs the machine or a
+  missing tool; it is never counted as passed.
+
+Exit status:
+  0  no check failed
+  1  at least one check failed
+  2  usage error
+
+Docs and bug reports: https://github.com/Weegee/macbook91-facetimehd-pub
+EOF
+}
+for a in "$@"; do
+	case $a in
+		-h|--help) usage_full; exit 0 ;;
+		-V|--version) echo "$PROG $VERSION"; exit 0 ;;
+	esac
+done
+if [ $# -gt 0 ]; then
+	case $1 in -?*) what="unknown option '$1'" ;; *) what="unexpected argument '$1'" ;; esac
+	printf '%s: error: %s\nUsage: %s\nExample: make check\nHelp: %s --help\n' "$PROG" "$what" "$PROG" "$PROG" >&2
+	exit 2
+fi
 MOD_DIR=src/macbook91-facetimehd
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 
@@ -39,6 +81,7 @@ for f in "${SHELLS[@]}" "$FWX"; do check "bash -n $f" bash -n "$f"; done
 if command -v shellcheck >/dev/null; then
 	check "shellcheck (warnings) on packaged and packaging scripts" shellcheck -S warning -s bash \
 		tools/macbook91-facetimehd-verify tools/macbook91-facetimehd-kernel-series \
+		tools/dev-cam-load.sh tools/dev-cam-unload.sh tools/dev-power-baseline.sh tools/dev-root-diag.sh \
 		packaging/fetch-upstream.sh packaging/make-package.sh packaging/promote-release.sh \
 		packaging/arch/macbook91-facetimehd-dkms.install "$FWX"
 else
@@ -114,20 +157,35 @@ fw_fetch_ok() {
 }
 check "firmware fetch script: pins = verify pins, installed, in the tarball, asks first" fw_fetch_ok
 fw_ask_ok() {
-	# Without a terminal and without --yes the script downloads nothing and fails.
-	local out
-	out=$(setsid -w "$FWX" "$T/fw-noask" </dev/null 2>&1) && return 1
-	grep -q 'aborted, nothing downloaded' <<<"$out" && [ ! -e "$T/fw-noask" ]
+	# Without a terminal and without --yes the script downloads nothing: usage error 2 that
+	# names --yes. With a terminal it would ask; --no-input also refuses.
+	local out rc
+	out=$(setsid -w "$FWX" "$T/fw-noask" </dev/null 2>&1); rc=$?
+	[ "$rc" = 2 ] && grep -q 'confirmation needed, but there is no terminal' <<<"$out" &&
+	grep -q -- '--yes' <<<"$out" && [ ! -e "$T/fw-noask" ] || { echo "no terminal: exit $rc: $out"; return 1; }
+	out=$(setsid -w "$FWX" --no-input "$T/fw-noask" </dev/null 2>&1); rc=$?
+	[ "$rc" = 2 ] && [ ! -e "$T/fw-noask" ] || { echo "--no-input: exit $rc: $out"; return 1; }
 }
-check "firmware fetch script refuses to run without an explicit yes" fw_ask_ok
+check "firmware fetch script refuses to run without an explicit yes (exit 2, names --yes)" fw_ask_ok
 fw_note_ok() {
 	# The install message says loudly that the firmware is missing and whose terms apply.
 	local f=packaging/arch/macbook91-facetimehd-dkms.install
-	grep -q 'IMPORTANT: THE CAMERA DOES NOT WORK YET - APPLE FIRMWARE NEEDED' "$f" &&
+	grep -q "macbook91-facetimehd: warning: the camera does not work yet, Apple's firmware is missing" "$f" &&
 	grep -q 'sudo macbook91-facetimehd-fetch-firmware' "$f" &&
-	grep -q 'does NOT contain' "$f" && grep -q 'own account and at your own' "$f"
+	grep -q 'does not contain' "$f" && grep -q 'own account and at your own' "$f"
 }
 check "install message carries the firmware notice" fw_note_ok
+install_hig_ok() {
+	# Every message starts with "macbook91-facetimehd: note: " or ": warning: ", follow-up
+	# lines are indented, and there is no banner and no shouting (text HIG TYP-1, TXT-8).
+	local f=packaging/arch/macbook91-facetimehd-dkms.install out bad
+	out=$(bash -c 'source "$1"; post_install' _ "$f" 2>&1) || { echo "$out"; return 1; }
+	[ -n "$out" ] || { echo "post_install printed nothing"; return 1; }
+	bad=$(grep -vE '^(  |$|macbook91-facetimehd: (note|warning): )' <<<"$out")
+	[ -z "$bad" ] || { echo "lines outside the message form:"; echo "$bad"; return 1; }
+	! grep -qE '#{5,}|={5,}|IMPORTANT|NOT |WARNING' <<<"$out" || { echo "banner or capitals for emphasis"; return 1; }
+}
+check "install message: note/warning form, indented follow-up lines, no banner" install_hig_ok
 fw_blob_ok() {
 	# No tracked file may be one of the four Apple files the extractor pins (firmware.bin,
 	# the 1675 set file, AppleCameraInterface, AppleCameraAssistant). Text that names a hash is fine.
@@ -144,9 +202,118 @@ verify_wq_ok() {
 	printf '#!/bin/sh\necho "workqueue: work func fthd_idle_work [macbook91_facetimehd] enqueued on deprecated workqueue. Use system_{percpu|dfl}_wq instead."\n' > "$T/stub/journalctl" &&
 	chmod +x "$T/stub/journalctl" &&
 	PATH="$T/stub:$PATH" timeout 120 tools/macbook91-facetimehd-verify --no-capture 2>&1 |
-		grep -q 'WARN  kernel log: .* 1 workqueue warnings naming macbook91_facetimehd'
+		grep -q 'WARN  kernel log: .* 1 workqueue warning naming macbook91_facetimehd'
 }
 check "verify warns about a workqueue warning naming the module" verify_wq_ok
+
+# --- text interfaces (house text HIG) ------------------------------------------------
+# -h/--help: full help on stdout, exit 0, nothing on stderr. -V/--version: one line.
+# An unknown option: error line, Usage:, Example:, Help: on stderr, exit 2, nothing on stdout.
+ui_ok() { # ui_ok NAME COMMAND...   (UI_NOBAD=1: the command passes unknown options on)
+	local name=$1 out rc; shift
+	out=$("$@" --help 2>"$T/ui.err"); rc=$?
+	[ "$rc" = 0 ] && [ ! -s "$T/ui.err" ] && grep -q '^Usage: ' <<<"$out" &&
+	grep -q '^Docs and bug reports: https://github.com/Weegee/macbook91-facetimehd-pub$' <<<"$out" ||
+		{ echo "$name --help: exit $rc, or stderr not empty, or no Usage: / docs line"; return 1; }
+	out=$("$@" --help --no-such-option 2>/dev/null) && grep -q '^Usage: ' <<<"$out" ||
+		{ echo "$name: --help does not win over other arguments"; return 1; }
+	out=$("$@" --version 2>"$T/ui.err"); rc=$?
+	grep -qE "^[A-Za-z0-9._/-]+( \([a-z0-9-]+\))? $VERSION\$" <<<"$out" && [ "$rc" = 0 ] && [ "$(wc -l <<<"$out")" = 1 ] ||
+		{ echo "$name --version: exit $rc, output '$out'"; return 1; }
+	[ -z "${UI_NOBAD:-}" ] || return 0
+	"$@" --no-such-option >"$T/ui.out" 2>"$T/ui.err" </dev/null; rc=$?
+	[ "$rc" = 2 ] && [ ! -s "$T/ui.out" ] && grep -q "^[A-Za-z0-9._ /-]*: error: .*--no-such-option" "$T/ui.err" &&
+	grep -q '^Usage: ' "$T/ui.err" && grep -q '^Example: ' "$T/ui.err" && grep -q '^Help: ' "$T/ui.err" ||
+		{ echo "$name: unknown option: exit $rc, stdout/stderr not as specified"; sed 's/^/  | /' "$T/ui.err" | head -5; return 1; }
+}
+check "verify: --help, --version, usage error exit 2" ui_ok verify tools/macbook91-facetimehd-verify
+check "kernel-series: --help, --version, usage error exit 2" ui_ok kernel-series bash tools/macbook91-facetimehd-kernel-series
+check "fetch-firmware: --help, --version, usage error exit 2" ui_ok fetch-firmware "$FWX"
+check "promote-release.sh: --help, --version, usage error exit 2" ui_ok promote-release packaging/promote-release.sh
+check "fetch-upstream.sh: --help, --version, usage error exit 2" ui_ok fetch-upstream packaging/fetch-upstream.sh
+check "mkdist.py: --help, --version, usage error exit 2" ui_ok mkdist python3 -I packaging/mkdist.py
+UI_NOBAD=1 check "make-package.sh: --help and --version (other options are makepkg's)" ui_ok make-package packaging/make-package.sh
+for dev in dev-cam-load dev-cam-unload dev-power-baseline dev-root-diag; do
+	check "$dev.sh: --help, --version, usage error exit 2 (no root, nothing touched)" ui_ok "$dev" "tools/$dev.sh"
+done
+check "tests/run-tests.sh: --help, --version, usage error exit 2" ui_ok run-tests tests/run-tests.sh
+verify_opt_ok() {
+	# A near miss gets a suggestion (HIL-6); the report format is unchanged.
+	local err
+	err=$(tools/macbook91-facetimehd-verify --nocapture 2>&1 >/dev/null)
+	grep -qx 'Did you mean: macbook91-facetimehd-verify --no-capture' <<<"$err"
+}
+check "verify: a misspelt option names the intended one" verify_opt_ok
+mkdist_arg_ok() {
+	# --out without a directory is a usage error, not a traceback.
+	local err rc
+	err=$(python3 -I packaging/mkdist.py --out 2>&1 >/dev/null); rc=$?
+	[ "$rc" = 2 ] && grep -q "mkdist.py: error: option '--out' needs a directory" <<<"$err" && ! grep -q Traceback <<<"$err"
+}
+check "mkdist.py: --out without a value fails with a usage error" mkdist_arg_ok
+fw_mock_ok() {
+	# The whole path of the fetch script (download, extract, verify, install) against synthetic
+	# data: a stub curl serves xz-compressed ranges, a copy of the script pins the hashes of
+	# that data. No network, no Apple file.
+	local d=$T/fwm out so rc pid
+	rm -rf "$d"; mkdir -p "$d/stub" "$d/data" "$d/slow" || return 1
+	python3 -I - "$d/data" "$FWX" "$d/fetch" <<'PY' || return 1
+import gzip, hashlib, lzma, re, sys
+data, src, dst = sys.argv[1:4]
+def sha(b): return hashlib.sha256(b).hexdigest()
+fw = b"synthetic firmware, not Apple's\n" * 64
+gz = gzip.compress(fw, mtime=0)
+iface = bytearray(249719 + 507353)
+iface[81920:81920 + len(gz)] = gz
+setf = (bytes(range(256)) * 71)[:18044]
+asst = bytearray(515632)
+asst[430080:430080 + len(setf)] = setf
+ranges = {"699186570-703316225": bytes(100) + bytes(iface[:249719]),
+          "703316242-707986973": bytes(iface[249719:]) + bytes(100),
+          "430282546-439105037": bytes(7477241) + bytes(asst) + bytes(1000)}
+for rng, blob in ranges.items():
+    open(f"{data}/{rng}.xz", "wb").write(lzma.compress(blob))
+s = open(src).read()
+for pattern, value in ((r"^H_DRV=\w+$", "H_DRV=" + sha(bytes(iface))), (r"^H_ASST=\w+$", "H_ASST=" + sha(bytes(asst))),
+                       (r"^H_FW=\w+$", "H_FW=" + sha(fw)), (r"^FW_OFF=81920 FW_LEN=\d+$", f"FW_OFF=81920 FW_LEN={len(gz)}"),
+                       (r"^1675 430080 18044 \w+$", "1675 430080 18044 " + sha(setf))):
+    s, n = re.subn(pattern, value, s, flags=re.M)
+    assert n == 1, pattern
+open(dst, "w").write(s)
+open(f"{data}/fw.sha", "w").write(sha(fw) + "\n")
+PY
+	cat > "$d/stub/curl" <<'STUB'
+#!/bin/sh
+while [ $# -gt 0 ]; do case $1 in -r) r=$2; shift ;; esac; shift; done
+[ -r "$MOCKDIR/$r.xz" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
+cat "$MOCKDIR/$r.xz"
+STUB
+	printf '#!/bin/sh\nexec sleep 30\n' > "$d/slow/curl"; chmod +x "$d/stub/curl" "$d/slow/curl"
+	# 1. quiet run: nothing printed, files and modes as promised
+	out=$(MOCKDIR=$d/data PATH="$d/stub:$PATH" bash "$d/fetch" --yes -q "$d/out" "$d/keep" 2>&1 </dev/null); rc=$?
+	[ "$rc" = 0 ] && [ -z "$out" ] || { echo "-q run: exit $rc, output: $out"; return 1; }
+	[ "$(sha256sum < "$d/out/facetimehd/firmware.bin" | cut -d' ' -f1)" = "$(cat "$d/data/fw.sha")" ] &&
+	[ -s "$d/out/facetimehd/1675_01XX.dat" ] && [ "$(stat -c %a "$d/out/facetimehd/firmware.bin")" = 644 ] &&
+	[ "$(stat -c %a "$d/keep")" = 700 ] && [ "$(ls "$d/keep" | wc -l)" = 2 ] || { echo "files or modes wrong"; return 1; }
+	# 2. normal run: stdout stays empty, the result line is on stderr
+	so=$(MOCKDIR=$d/data PATH="$d/stub:$PATH" bash "$d/fetch" --yes "$d/out2" 2>"$d/err2" </dev/null); rc=$?
+	[ "$rc" = 0 ] && [ -z "$so" ] && grep -q 'verified and written to' "$d/err2" || { echo "normal run: exit $rc, stdout '$so'"; return 1; }
+	# 3. a damaged part: error, exit 1, nothing written
+	cp -a "$d/data" "$d/bad"; printf x | xz -c > "$d/bad/703316242-707986973.xz"
+	out=$(MOCKDIR=$d/bad PATH="$d/stub:$PATH" bash "$d/fetch" --yes "$d/out3" 2>&1 </dev/null); rc=$?
+	[ "$rc" = 1 ] && grep -q 'does not match its pinned SHA256' <<<"$out" && [ ! -e "$d/out3" ] ||
+		{ echo "damaged part: exit $rc: $out"; return 1; }
+	# 4. a failing download: exit 1, the reason and a hint, nothing written
+	rm "$d/data/430282546-439105037.xz"
+	out=$(MOCKDIR=$d/data PATH="$d/stub:$PATH" bash "$d/fetch" --yes "$d/out5" 2>&1 </dev/null); rc=$?
+	[ "$rc" = 1 ] && grep -q 'download from updates.cdn-apple.com failed' <<<"$out" && grep -q -- '--timeout' <<<"$out" &&
+	[ ! -e "$d/out5" ] || { echo "failing download: exit $rc: $out"; return 1; }
+	# 5. SIGTERM during a stalled download: "cancelled", exit 143, nothing written
+	PATH="$d/slow:$PATH" bash "$d/fetch" --yes "$d/out4" >/dev/null 2>"$d/term.err" </dev/null &
+	pid=$!; sleep 1; kill -TERM "$pid"; wait "$pid"; rc=$?
+	[ "$rc" = 143 ] && grep -q ': cancelled' "$d/term.err" && [ ! -e "$d/out4" ] || { echo "SIGTERM: exit $rc"; return 1; }
+}
+check "firmware fetch script on synthetic data: -q, stderr, modes, damaged part, failed download, SIGTERM 143" fw_mock_ok
 
 # --- kernel series note ----------------------------------------------------------
 # DKMS builds for every kernel; packaging/overlay/TESTED-SERIES is the one list
@@ -302,7 +469,11 @@ if [ -d build/upstream/.git ] || git ls-remote -q "$(awk '$1 == "driver.repo" {p
 		# The installed note reads the installed list; the hook calls the installed script.
 		local k=$T/root/usr/lib/macbook91-facetimehd/kernel-series
 		[ -x "$k" ] &&
-		grep -qx "SERIES_FILE=/usr/src/macbook91-facetimehd-$VERSION/TESTED-SERIES" "$k" &&
+		grep -qx "PKGVER=$VERSION" "$k" &&
+		grep -qx 'SERIES_FILE=/usr/src/macbook91-facetimehd-$PKGVER/TESTED-SERIES' "$k" &&
+		[ "$(bash "$k" --version)" = "macbook91-facetimehd-kernel-series (macbook91-facetimehd-dkms) $VERSION" ] &&
+		[ "$("$T/root/usr/bin/macbook91-facetimehd-verify" --version)" = "macbook91-facetimehd-verify $VERSION" ] &&
+		[ "$("$T/root/usr/bin/macbook91-facetimehd-fetch-firmware" --version)" = "macbook91-facetimehd-fetch-firmware $VERSION" ] &&
 		cmp -s "$s/TESTED-SERIES" packaging/overlay/TESTED-SERIES &&
 		[ "$(bash "$k" --list --series-file "$s/TESTED-SERIES")" = "$(bash "$KS" --list --series-file packaging/overlay/TESTED-SERIES)" ] &&
 		cmp -s "$T/root/usr/share/libalpm/hooks/71-macbook91-facetimehd-series.hook" tools/macbook91-facetimehd-series.hook
