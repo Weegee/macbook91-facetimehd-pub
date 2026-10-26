@@ -1,0 +1,63 @@
+macbook91-facetimehd 20261026.01-1 - RELEASED (tag v20261026.01, 2026-10-26): kernel series note, no driver change; released without a hardware gate, runtime carried over
+
+Change against 20261021.01: no driver change. The module tree of both source
+tarballs is identical in its 22 files (source ID 949038441c655353);
+SOURCES.sha256 differs only by the line of the new TESTED-SERIES. The DKMS
+tree carries TESTED-SERIES, the kernel series on which
+macbook91-facetimehd-verify passed on the test machine: 6.18 and 7.2. DKMS
+still builds the driver for every kernel (dkms.conf sets no
+BUILD_EXCLUSIVE_KERNEL). New in the package:
+/usr/lib/macbook91-facetimehd/kernel-series, the only reader of that list, and
+the pacman hook 71-macbook91-facetimehd-series.hook, which calls it after a
+transaction that installs or upgrades a kernel or this package and prints a
+two-line note on stderr for every installed kernel of a series not in the
+list. It builds and blocks nothing and never fails the transaction. The
+tarball differs from 20261021.01 in the Makefile (the install target installs
+the script and the hook), README.md, VERSION, the two new files in tools/ and
+TESTED-SERIES; no other file differs.
+Driver: patjak/facetimehd c9b063a with patches 0001-0017. Depends on dkms.
+
+Verified (2026-10-26, running kernel 6.18.55-2-cachyos-lts, no hardware
+test): tests/run-tests.sh 43 passed, 0 failed, 3 blocked (hardware) on the
+committed tree with the pinned tarball, including the hermetic tests of the
+series note on a simulated kernel tree with tested and untested series, its
+exit codes, the hook file and the installed paths; the module build for the
+running kernel (GCC) is part of it. make arch-pkg ok with the pinned tarball
+60e0fb4b5cc6...; makepkg --printsrcinfo equals .SRCINFO; makepkg
+--verifysource passes; namcap on the package: no errors, the three warnings
+in docs/NAMCAP.md (the bash warning now also names kernel-series); namcap on
+the PKGBUILD: nothing. Module tree of this tarball built by hand, the way
+dkms 3 calls make, against 7.3.0-4-cachyos (clang, LLVM=1: rc 0, one
+warning that the local clang 23.1.4 differs from the kernel's 23.1.3) and
+6.18.55-2-cachyos-lts (GCC: rc 0, no warning): both report version
+20261026.01+949038441c655353 with the matching vermagic and reference no
+deprecated workqueue symbol. The package holds kernel-series (0755, reading
+/usr/src/macbook91-facetimehd-20261026.01/TESTED-SERIES), the hook and
+TESTED-SERIES. kernel-series --hook, run by hand on the test machine with this
+list, printed one note, for 7.3.0-4-cachyos, and exited 0. Release gate of
+promote-release.sh: private suite passed, scan guard over the files a commit
+carries: no hit.
+
+Runtime: NOT RUN for 20261026.01 on any kernel; the hardware gate was not
+run because the test machine was set aside, and the release was made without
+it. The driver evidence carries over because the module source is
+byte-identical: 7.2.11-1-cachyos with 20261021.01 (macbook91-facetimehd-verify
+PASS with 0 warnings, docs/test-status.json hw.install_20261021_01) and
+6.18.55-2-cachyos-lts with 20261020.01 (verify PASS, hw.lts_kernel). On
+7.3.0-4-cachyos, 20261021.01 was built by DKMS and loaded, and it probed the
+camera without kernel errors (hw.kernel_7_3_probe); capture, idle power-off
+and suspend were not run there (hw.kernel_7_3_verify).
+
+Not verified: pacman -U of this package, and with it the hook and its note in
+a real pacman transaction; the DKMS build of this package by dkms itself;
+macbook91-facetimehd-verify on 7.3; suspend and resume on 6.18 and 7.3;
+suspend and hang recovery with patches 0013-0017 on any kernel; the Apple
+license terms for the firmware files.
+
+Only this release directory is kept; earlier release directories are not
+part of this repository.
+
+Local build of the driver package, made from the pinned tarball: not tracked,
+not covered by SHA256SUMS. Its .BUILDINFO records the build time, so a
+rebuild gives the same files but not the same bytes.
+a12d5f4f30fdb107c1f56bcb928ee522038afd930a1958c2b9bb748829dcba5c  macbook91-facetimehd-dkms-20261026.01-1-x86_64.pkg.tar.zst

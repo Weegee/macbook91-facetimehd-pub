@@ -9,7 +9,7 @@
 
 pkgbase=macbook91-facetimehd
 pkgname=(macbook91-facetimehd-dkms)
-pkgver=20261021.01
+pkgver=20261026.01
 pkgrel=1
 pkgdesc="FaceTime HD camera driver for Apple MacBook9,1 (A1534) with suspend and hang recovery"
 arch=('x86_64')
@@ -28,7 +28,7 @@ makedepends=('make')
 # packaging/upstream.lock) and no Apple data. The checksum is pinned at
 # release time; `make arch-pkg` refuses a tarball that does not match it.
 source=("$pkgbase-$pkgver.tar")
-sha256sums=('3390f71d197d2563bd03ccef4354100671c677bad4ff6d5829a40ed86bc640a5')
+sha256sums=('60e0fb4b5cc69ce0a4a886437e338a0e4e63b170abfbc44421cd8ac2d0eb3042')
 
 package_macbook91-facetimehd-dkms() {
     pkgdesc="FaceTime HD camera driver for Apple MacBook9,1 (A1534) with suspend and hang recovery (DKMS)"
