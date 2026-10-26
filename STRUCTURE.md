@@ -1,4 +1,4 @@
-Structure version: 20261026.01
+Structure version: 20261026.02
 
 Layout rules for this repository. The README describes the same directories
 for a reader; this file is the rule.

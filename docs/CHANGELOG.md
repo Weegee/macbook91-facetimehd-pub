@@ -3,6 +3,63 @@
 Versions have the form YYYYMMDD.NN (release date, NN counts releases that
 day). The release tag is v<version>.
 
+## 20261026.02
+
+Text interfaces follow the house guidelines for terminal output. No driver
+change.
+
+- Driver: the same upstream commit c9b063a and patches 0001-0017 as
+  20261026.01; module source identity 949038441c655353 and the whole module
+  tree unchanged.
+- Every command answers `--help` (full help on stdout, exit 0, wins over other
+  arguments) and `--version` (`NAME VERSION`). An unknown or malformed
+  argument is a usage error: exit status 2 and, on stderr, the error, a
+  `Usage:` and an `Example:` line and `Help: NAME --help`. A near miss names
+  the intended option (`macbook91-facetimehd-verify --nocapture`). Ctrl+C and
+  SIGTERM end the tools with `NAME: cancelled` and exit status 130 and 143.
+  This covers `macbook91-facetimehd-verify`, `macbook91-facetimehd-fetch-firmware`,
+  `/usr/lib/macbook91-facetimehd/kernel-series`, `tools/dev-*.sh`, the scripts
+  in `packaging/` and `tests/run-tests.sh`.
+- Changed for scripts that call the tools:
+  - `macbook91-facetimehd-fetch-firmware`: the notice and the question go to
+    stderr (the notice went to stdout, the answer was read from the terminal
+    device even when stdin was a pipe). Unless stdin and stderr are terminals,
+    and without `--yes`, it stops with exit status 2 and "confirmation needed,
+    but there is no terminal" (it stopped with exit 1 and "aborted, nothing
+    downloaded"). New options: `-y/--yes`, `--no-input`, `-q/--quiet`,
+    `-o/--output DIR`, `--keep DIR` and `--timeout SEC`; a stalled download
+    ends after 30 s without data (there was no limit). Progress and the result
+    line go to stderr, stdout stays empty. Every downloaded part is checked
+    before anything is written to the output directory, as the script header
+    always said. The positional `OUTDIR [KEEPDIR]` still works.
+  - `macbook91-facetimehd-verify`: the report format is unchanged; plurals are
+    right (`1 workqueue warning`, `PASS (1 warning)`; these were
+    `1 workqueue warnings` and `PASS (1 warnings)`).
+  - `tools/dev-cam-load.sh` and `dev-cam-unload.sh`: the `insmod rc=N` and
+    `rmmod rc=N` lines are unchanged, but the exit status is now 1 when
+    insmod or rmmod failed (it was 0). All four `tools/dev-*.sh` refuse to run
+    without root instead of failing halfway.
+  - `packaging/mkdist.py`: `--out` without a value is a usage error, not a
+    traceback; errors read `mkdist.py: error: ...` with a hint. The line
+    `SHA256  PATH` on stdout is unchanged. `packaging/promote-release.sh`,
+    `fetch-upstream.sh` and `make-package.sh` follow the same message form;
+    their status lines go to stderr; `fetch-upstream.sh` gets `--timeout`.
+  - The pacman install message uses `macbook91-facetimehd: warning: ...` and
+    `note: ...` headings without a banner or capitals for emphasis; the text,
+    the commands and the legal notice are the same.
+- Unchanged on purpose: the text of the kernel-series hook note, the
+  PASS/FAIL/WARN lines of verify, the summary line of the test suite.
+- Deviations, named in the code: `Abweichung von EIN-3` (the firmware prompt
+  wants the typed word `yes`, not `[y/N]`: it is consent to Apple's license
+  terms); `Abweichung von ARG-3` (positional `OUTDIR [KEEPDIR]` kept for
+  compatibility); `Abweichung von FEH-2` (the `ERROR:` lines of the DKMS module
+  Makefile stay, because that file is part of the module tree this release
+  keeps byte-identical; they change with the next driver change).
+- Tests: `--help`, `--version` and the usage error for every command; the
+  firmware script end to end on synthetic data (no network, no Apple file:
+  quiet run, file modes, a damaged part, a failed download, SIGTERM); the shape
+  of the install message.
+
 ## 20261026.01
 
 Kernel series note. No driver change.
