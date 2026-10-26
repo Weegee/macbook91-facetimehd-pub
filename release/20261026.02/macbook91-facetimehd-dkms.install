@@ -1,4 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Messages follow the house text HIG: "macbook91-facetimehd: warning: ..." or
+# "note: ..." as the first line, follow-up lines indented by two spaces, no
+# banners and no capitals for emphasis, commands on one line so they can be
+# copied. pacman prints what these functions write; there is no terminal
+# check and no prompt here.
+#
 # Whether clang/lld/llvm or gcc are needed is a property of the installed
 # kernels, not of this package: the module Makefile takes the compiler family
 # from the target kernel's own .config. Nothing is installed on anyone's
@@ -19,16 +26,13 @@ _toolchain_note() {
     if [ "$kernels" -eq 0 ]; then
         cat <<'MSG'
 
-  NO KERNEL HEADERS FOUND
-
-  DKMS has nothing to build against. Install the headers matching your
+macbook91-facetimehd: warning: no kernel headers found
+  DKMS has nothing to build against. Install the headers that match your
   kernel, for example:
-
-      sudo pacman -S linux-cachyos-headers      # CachyOS default kernel
-      sudo pacman -S linux-cachyos-lts-headers  # CachyOS LTS
-      sudo pacman -S linux-headers              # Arch default kernel
-      sudo pacman -S linux-lts-headers          # Arch LTS
-
+    sudo pacman -S linux-cachyos-headers      # CachyOS default kernel
+    sudo pacman -S linux-cachyos-lts-headers  # CachyOS LTS
+    sudo pacman -S linux-headers              # Arch default kernel
+    sudo pacman -S linux-lts-headers          # Arch LTS
 MSG
         return
     fi
@@ -36,26 +40,20 @@ MSG
     if [ "$need_clang" = 1 ] && ! command -v clang >/dev/null 2>&1; then
         cat <<'MSG'
 
-  MISSING COMPILER FOR THIS KERNEL
-
+macbook91-facetimehd: warning: the compiler for an installed kernel is missing
   An installed kernel is built with clang (CONFIG_CC_IS_CLANG=y), which the
   CachyOS kernels are. Its modules cannot be compiled with GCC, so the build
   needs:
-
-      sudo pacman -S clang lld llvm
-
+    sudo pacman -S clang lld llvm
 MSG
     fi
 
     if [ "$need_gcc" = 1 ] && ! command -v gcc >/dev/null 2>&1; then
         cat <<'MSG'
 
-  MISSING COMPILER FOR THIS KERNEL
-
+macbook91-facetimehd: warning: the compiler for an installed kernel is missing
   An installed kernel is built with GCC (CONFIG_CC_IS_GCC=y). The build needs:
-
-      sudo pacman -S gcc
-
+    sudo pacman -S gcc
 MSG
     fi
 }
@@ -65,68 +63,61 @@ MSG
 # responsibility, after reading this.
 _firmware_note() {
     if [ -r /usr/lib/firmware/facetimehd/firmware.bin ]; then
-        echo "  Camera firmware found in /usr/lib/firmware/facetimehd/."
-        echo "  macbook91-facetimehd-verify checks it against the pinned SHA256."
+        cat <<'MSG'
+
+macbook91-facetimehd: note: camera firmware found in /usr/lib/firmware/facetimehd/
+  macbook91-facetimehd-verify checks it against the pinned SHA256.
+MSG
         return
     fi
     cat <<'MSG'
 
-  ######################################################################
-  #                                                                    #
-  #   IMPORTANT: THE CAMERA DOES NOT WORK YET - APPLE FIRMWARE NEEDED  #
-  #                                                                    #
-  ######################################################################
-
-  The camera needs Apple's firmware, which this package does NOT contain
-  and does NOT download. Apple's firmware is proprietary software under
-  Apple's license terms. This project does not distribute it and has NOT
+macbook91-facetimehd: warning: the camera does not work yet, Apple's firmware is missing
+  The camera needs Apple's firmware, which this package does not contain
+  and does not download. Apple's firmware is proprietary software under
+  Apple's license terms. This project does not distribute it and has not
   verified whether those terms allow you to use it this way.
 
   If you decide to get it, on your own account and at your own
   responsibility, run:
+    sudo macbook91-facetimehd-fetch-firmware
 
-      sudo macbook91-facetimehd-fetch-firmware
-
-  It asks for confirmation, then downloads about 18 MB of Apple's
+  The command asks for confirmation, then downloads about 18 MB of Apple's
   macOS 10.12.6 update from updates.cdn-apple.com, checks every part
   against a pinned SHA256 and writes only the extracted firmware to
-  /usr/lib/firmware/facetimehd/. pacman does not track those files:
-  remove them yourself with  sudo rm -r /usr/lib/firmware/facetimehd
-
+  /usr/lib/firmware/facetimehd/. pacman does not track those files. To
+  remove them:
+    sudo rm -r /usr/lib/firmware/facetimehd
 MSG
 }
 
 post_install() {
     cat <<'MSG'
 
-  macbook91-facetimehd installed.
-
+macbook91-facetimehd: note: installed
   The DKMS hook builds the module for every installed kernel with headers
-  when this transaction finishes; `dkms status macbook91-facetimehd` must
-  show "installed" for each. Then load it or reboot:
+  when this transaction finishes. This must show "installed" for each:
+    dkms status macbook91-facetimehd
 
-      sudo modprobe macbook91-facetimehd
+  Then load the module or reboot:
+    sudo modprobe macbook91-facetimehd
 
-  Then check the result. It returns one PASS/FAIL:
+  Then check the result. It ends with one PASS or FAIL line:
+    macbook91-facetimehd-verify
 
-      macbook91-facetimehd-verify
-
-  WHAT IS DIFFERENT FROM UPSTREAM FACETIMEHD
-
+macbook91-facetimehd: note: differences from upstream facetimehd
   The module is called macbook91-facetimehd (macbook91_facetimehd in
   lsmod). It survives suspend with the camera open, restarts a hung image
   processor by power cycling it, and powers the camera off after
   idle_poweroff_ms (default 5000 ms) without a stream, which saves about
   0.4 W of CPU package power. The first frame after power-off takes about
-  1.1 s instead of 0.4 s. Keep the camera powered with:
+  1.1 s instead of 0.4 s. To keep the camera powered:
+    echo 'options macbook91_facetimehd idle_poweroff_ms=-1' | sudo tee /etc/modprobe.d/macbook91-facetimehd.conf
 
-      echo 'options macbook91_facetimehd idle_poweroff_ms=-1' | \
-          sudo tee /etc/modprobe.d/macbook91-facetimehd.conf
-
-  To roll back completely:
-      sudo pacman -R macbook91-facetimehd-dkms
-      sudo rm -r /usr/lib/firmware/facetimehd   # if you fetched the firmware
-
+  To roll back completely (the second command only if you fetched the
+  firmware):
+    sudo pacman -R macbook91-facetimehd-dkms
+    sudo rm -r /usr/lib/firmware/facetimehd
 MSG
     _toolchain_note
     _firmware_note
