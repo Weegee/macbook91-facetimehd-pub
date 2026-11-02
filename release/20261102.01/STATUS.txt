@@ -1,0 +1,56 @@
+macbook91-facetimehd 20261102.01-1 - RELEASED (tag v20261102.01, 2026-11-02): install message on an upgrade, house HIG wording, no driver change; released without a hardware gate, runtime carried over
+
+Change against 20261026.02: no driver change. The module tree of both source
+tarballs is identical in all 23 files of src/ (source ID 949038441c655353), checked
+with diff -r over src/ of the two extracted tarballs; patches/,
+packaging/overlay/ and packaging/upstream.lock are unchanged. The tarball
+differs in two files, VERSION and tools/macbook91-facetimehd-kernel-series.
+What changed (details in docs/CHANGELOG.md):
+- The pacman message of the .install script on an upgrade: one note with the
+  old and the new version ("upgraded from X to Y") that says the loaded module
+  keeps running until the next boot or module reload and names
+  macbook91-facetimehd-verify for the check, the two warnings that make the
+  DKMS build fail (no kernel headers, compiler missing), and a short warning
+  when Apple's firmware is missing. A firmware that is there is not announced
+  on an upgrade. The installation text of a first installation is unchanged.
+- macbook91-facetimehd-kernel-series --hook: the first line of the note no
+  longer ends with a period; its words are the same.
+- The comments and test headings that name the house guideline say "house
+  HIG"; the rule IDs are the same.
+Driver: patjak/facetimehd c9b063a with patches 0001-0017. Depends on dkms.
+
+Verified (2026-11-02, running kernel 7.3.1-1-cachyos, no hardware test):
+tests/run-tests.sh 60 passed, 0 failed, 3 blocked (hardware) on the committed
+tree with the pinned tarball 965227e933b3..., including the checks of the
+upgrade message and of the hook note, mkdist.py writing byte-identical
+tarballs, and the module build for the running kernel (the module builds as
+20261102.01+949038441c655353). Before the pin and the tarball existed the same
+suite gave 59 passed, 0 failed, 4 blocked (the pin check was blocked). make
+arch-pkg ok with the pinned tarball; makepkg --printsrcinfo equals .SRCINFO;
+makepkg --verifysource passes; namcap on the package: no errors, the three
+warnings in docs/NAMCAP.md; namcap on the PKGBUILD: nothing. Release gate of
+promote-release.sh: private suite 29 passed, 0 failed, scan guard no hit.
+
+Runtime: NOT RUN for 20261102.01 on any kernel; the hardware gate was not run
+(this build was made on a machine that is not the MacBook9,1) and the release
+was made without it. The driver evidence carries over because the module
+source is byte-identical to 20261026.02, 20261026.01 and 20261021.01 (same
+source ID 949038441c655353): 7.2.11-1-cachyos with 20261021.01
+(macbook91-facetimehd-verify PASS with 0 warnings, docs/test-status.json
+hw.install_20261021_01) and 6.18.55-2-cachyos-lts with 20261020.01 (verify
+PASS, hw.lts_kernel). On 7.3.0-4-cachyos, 20261021.01 was built by DKMS and
+loaded and probed the camera without kernel errors (hw.kernel_7_3_probe).
+
+Not verified: the new upgrade message in a real pacman transaction (it has run
+only in the hermetic tests); pacman -U of this package; the real firmware
+download from updates.cdn-apple.com with the reworked fetch script (tested
+only against synthetic data); the pacman hook in a real transaction; the DKMS
+build of this package by dkms itself; macbook91-facetimehd-verify on 7.3;
+suspend and resume on 6.18 and 7.3; suspend and hang recovery with patches
+0013-0017 on any kernel; the Apple license terms for the firmware files.
+
+Only this release directory is kept; earlier release directories are not
+part of this repository.
+
+Local build of the driver package (not tracked, not covered by SHA256SUMS, not published as a release file).
+d4f4e29c80f66709af676de6d8e9c4c80ec3aeaa5a5ad819b943e6fcbab549c1  macbook91-facetimehd-dkms-20261102.01-1-x86_64.pkg.tar.zst

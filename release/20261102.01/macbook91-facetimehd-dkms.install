@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Messages follow the house text HIG: "macbook91-facetimehd: warning: ..." or
+# Messages follow the house HIG (text part): "macbook91-facetimehd: warning: ..." or
 # "note: ..." as the first line, follow-up lines indented by two spaces, no
 # banners and no capitals for emphasis, commands on one line so they can be
 # copied. pacman prints what these functions write; there is no terminal
@@ -60,13 +60,28 @@ MSG
 
 # Apple's camera firmware is not part of this package and is never downloaded
 # on the user's behalf: the user runs the fetch script, on their own
-# responsibility, after reading this.
+# responsibility, after reading this. An upgrade ($1 = upgrade) stays silent
+# when the firmware is there and gives the short form of the warning when it
+# is not; an installation says either one in full.
 _firmware_note() {
     if [ -r /usr/lib/firmware/facetimehd/firmware.bin ]; then
+        [ "${1:-}" != upgrade ] || return 0
         cat <<'MSG'
 
 macbook91-facetimehd: note: camera firmware found in /usr/lib/firmware/facetimehd/
   macbook91-facetimehd-verify checks it against the pinned SHA256.
+MSG
+        return
+    fi
+    if [ "${1:-}" = upgrade ]; then
+        # The full notice was shown at the installation; this is the short form.
+        cat <<'MSG'
+
+macbook91-facetimehd: warning: the camera does not work yet, Apple's firmware is missing
+  This package does not contain it and does not download it. Whether Apple's
+  license terms allow you to use it this way has not been verified. To get it,
+  on your own account and at your own responsibility, run:
+    sudo macbook91-facetimehd-fetch-firmware
 MSG
         return
     fi
@@ -123,4 +138,19 @@ MSG
     _firmware_note
 }
 
-post_upgrade() { post_install; }
+# An upgrade reports what changed (the version) and what the user has to do
+# about it, plus the two conditions that make the camera or the build fail:
+# a missing compiler or header package, and missing firmware (house HIG FEH-5,
+# TXT-1). The explanations of post_install are not repeated.
+# pacman passes the new version as $1 and the old one as $2.
+post_upgrade() {
+    printf '\nmacbook91-facetimehd: note: upgraded from %s to %s\n' "${2:-unknown}" "$1"
+    cat <<'MSG'
+  The DKMS hook builds the new module for every installed kernel with headers
+  when this transaction finishes. The module that is loaded now keeps running
+  until the next boot or module reload. Then check the result:
+    macbook91-facetimehd-verify
+MSG
+    _toolchain_note
+    _firmware_note upgrade
+}
