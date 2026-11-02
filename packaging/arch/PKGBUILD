@@ -28,7 +28,7 @@ makedepends=('make')
 # packaging/upstream.lock) and no Apple data. The checksum is pinned at
 # release time; `make arch-pkg` refuses a tarball that does not match it.
 source=("$pkgbase-$pkgver.tar")
-sha256sums=('6605f264a45017f90f47ad17444c3b335b8d1327fcc444ec098dcbb98113161c')
+sha256sums=('965227e933b31905e97dbd2c70a4c020fa23ebfb6b711fa00cd8ea94cd3ddb04')
 
 package_macbook91-facetimehd-dkms() {
     pkgdesc="FaceTime HD camera driver for Apple MacBook9,1 (A1534) with suspend and hang recovery (DKMS)"
