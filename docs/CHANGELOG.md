@@ -3,6 +3,30 @@
 Versions have the form YYYYMMDD.NN (release date, NN counts releases that
 day). The release tag is v<version>.
 
+## 20261102.01
+
+Install message on an upgrade, and the references to the house HIG. No driver
+change.
+
+- Driver: the same upstream commit c9b063a and patches 0001-0017 as
+  20261026.02; `patches/`, `packaging/overlay/` and `packaging/upstream.lock`
+  are unchanged.
+- Pacman install message on an upgrade: it no longer prints "note: installed"
+  and the installation text (about 25 lines) every time. It gives one note
+  with the old and the new version and says that the loaded module is replaced
+  at the next boot or module reload, repeats the warnings that make the DKMS
+  build fail (no kernel headers, compiler missing), and warns in four lines
+  when Apple's firmware is missing. A firmware that is there is not announced.
+  The text of a first installation is unchanged.
+- `kernel-series --hook`: the first line of the note no longer ends with a
+  period; its words are the same.
+- The comments and test headings that name the house guideline say "house
+  HIG": its text part replaces the separate text HIG, the rule IDs are the
+  same.
+- Tests: the upgrade message (version step, no installation text, short
+  firmware warning, silence when the firmware is there) and the note line of
+  the hook.
+
 ## 20261026.02
 
 Text interfaces follow the house guidelines for terminal output. No driver
