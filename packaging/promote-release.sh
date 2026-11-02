@@ -18,7 +18,7 @@
 # Apple's firmware is never part of a release: the user downloads it with
 # tools/macbook91-facetimehd-fetch-firmware.
 #
-# Text interface (house text HIG): status and messages go to stderr, the script
+# Text interface (house HIG): status and messages go to stderr, the script
 # prints no result on stdout; exit 0 done, 1 refused or failed, 2 usage error,
 # 130 and 143 after SIGINT and SIGTERM.
 #

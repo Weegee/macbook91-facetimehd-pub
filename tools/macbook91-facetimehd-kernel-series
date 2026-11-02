@@ -137,7 +137,7 @@ case "$MODE" in
 			else
 				what="kernel $rel"
 			fi
-			printf 'macbook91-facetimehd: note: the camera driver is not tested on %s; tested series: %s.\n' \
+			printf 'macbook91-facetimehd: note: the camera driver is not tested on %s; tested series: %s\n' \
 				"$what" "$list" >&2
 			printf '  If the camera misbehaves on that kernel, boot the LTS kernel.\n' >&2
 		done

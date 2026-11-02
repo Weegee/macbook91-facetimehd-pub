@@ -30,7 +30,7 @@ otherwise, all with mtime 0. The tar is not compressed: gzip output depends on
 the zlib implementation, and the pinned checksum has to hold on every machine.
 Same scheme as packaging/mkdist.py in macbook91-cs4208.
 
-Text interface (house text HIG): the result, "SHA256  PATH", is the only line
+Text interface (house HIG): the result, "SHA256  PATH", is the only line
 on stdout; messages go to stderr as "mkdist.py: error: ..." with indented
 follow-up lines. Exit 0 done, 1 error, 2 usage error, 130 and 143 after SIGINT
 and SIGTERM.

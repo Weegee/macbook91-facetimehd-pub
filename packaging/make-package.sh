@@ -8,7 +8,7 @@
 # Arguments go to makepkg. A release is built with `make arch-pkg`, which also
 # requires a committed tree and the tarball checksum pinned in the PKGBUILD.
 #
-# Text interface (house text HIG): -h/--help and -V/--version are answered
+# Text interface (house HIG): -h/--help and -V/--version are answered
 # here, every other argument is makepkg's.
 #
 set -euo pipefail

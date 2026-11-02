@@ -8,7 +8,7 @@
 # usage: packaging/fetch-upstream.sh [--timeout SEC] [UPSTREAM_CLONE]
 #   UPSTREAM_CLONE  existing clone to fetch into (default build/upstream)
 #
-# Text interface (house text HIG): messages and status go to stderr, the script
+# Text interface (house HIG): messages and status go to stderr, the script
 # prints no result on stdout; exit 0 done, 1 error, 2 usage error.
 set -euo pipefail
 

@@ -177,7 +177,7 @@ fw_note_ok() {
 check "install message carries the firmware notice" fw_note_ok
 install_hig_ok() {
 	# Every message starts with "macbook91-facetimehd: note: " or ": warning: ", follow-up
-	# lines are indented, and there is no banner and no shouting (text HIG TYP-1, TXT-8).
+	# lines are indented, and there is no banner and no shouting (house HIG TYP-1, TXT-8).
 	local f=packaging/arch/macbook91-facetimehd-dkms.install out bad
 	out=$(bash -c 'source "$1"; post_install' _ "$f" 2>&1) || { echo "$out"; return 1; }
 	[ -n "$out" ] || { echo "post_install printed nothing"; return 1; }
@@ -186,6 +186,32 @@ install_hig_ok() {
 	! grep -qE '#{5,}|={5,}|IMPORTANT|NOT |WARNING' <<<"$out" || { echo "banner or capitals for emphasis"; return 1; }
 }
 check "install message: note/warning form, indented follow-up lines, no banner" install_hig_ok
+upgrade_msg_ok() {
+	# An upgrade says what changed and what to do (FEH-5, TXT-1): the version step, no repeat of the
+	# installation text, no "firmware found" line; a missing firmware gets the short warning, an
+	# installation the full one. The scriptlet reads /usr/lib/firmware and /usr/lib/modules, so a copy
+	# points them at a fake root with one kernel that names neither compiler.
+	local f=packaging/arch/macbook91-facetimehd-dkms.install r=$T/upg out bad
+	rm -rf "$r"; mkdir -p "$r/modules/6.18.0-test/build"; : > "$r/modules/6.18.0-test/build/.config"
+	sed "s#/usr/lib/firmware/facetimehd#$r/fw#g; s#/usr/lib/modules#$r/modules#g" "$f" > "$r/scriptlet"
+	out=$(bash -c 'source "$1"; post_upgrade 20261102.01-1 20261026.02-1' _ "$r/scriptlet" 2>&1) || { echo "$out"; return 1; }
+	grep -qx 'macbook91-facetimehd: note: upgraded from 20261026.02-1 to 20261102.01-1' <<<"$out" || { echo "$out"; return 1; }
+	! grep -qE 'installed$|differences from upstream|firmware found' <<<"$out" || { echo "installation text on upgrade"; echo "$out"; return 1; }
+	grep -qx 'macbook91-facetimehd: warning: the camera does not work yet, Apple.s firmware is missing' <<<"$out" &&
+	grep -q 'sudo macbook91-facetimehd-fetch-firmware' <<<"$out" &&
+	grep -q 'own account and at your own responsibility' <<<"$out" || { echo "no short firmware warning:"; echo "$out"; return 1; }
+	[ "$(wc -l <<<"$out")" -le 14 ] || { echo "upgrade text longer than 14 lines"; return 1; }
+	bad=$(grep -vE '^(  |$|macbook91-facetimehd: (note|warning): )' <<<"$out")
+	[ -z "$bad" ] || { echo "lines outside the message form:"; echo "$bad"; return 1; }
+	# Firmware present: the upgrade note alone.
+	mkdir -p "$r/fw"; : > "$r/fw/firmware.bin"
+	out=$(bash -c 'source "$1"; post_upgrade 20261102.01-1 20261026.02-1' _ "$r/scriptlet" 2>&1) || { echo "$out"; return 1; }
+	[ "$(grep -c '^macbook91-facetimehd: ' <<<"$out")" = 1 ] || { echo "more than the upgrade note with firmware present:"; echo "$out"; return 1; }
+	# post_install still gives the full text, with and without the firmware.
+	out=$(bash -c 'source "$1"; post_install' _ "$r/scriptlet" 2>&1) || return 1
+	grep -q 'macbook91-facetimehd: note: installed' <<<"$out" && grep -q 'note: camera firmware found' <<<"$out" || { echo "$out"; return 1; }
+}
+check "install message: an upgrade reports the version step and a missing firmware only" upgrade_msg_ok
 fw_blob_ok() {
 	# No tracked file may be one of the four Apple files the extractor pins (firmware.bin,
 	# the 1675 set file, AppleCameraInterface, AppleCameraAssistant). Text that names a hash is fine.
@@ -206,7 +232,7 @@ verify_wq_ok() {
 }
 check "verify warns about a workqueue warning naming the module" verify_wq_ok
 
-# --- text interfaces (house text HIG) ------------------------------------------------
+# --- text interfaces (house HIG) ------------------------------------------------
 # -h/--help: full help on stdout, exit 0, nothing on stderr. -V/--version: one line.
 # An unknown option: error line, Usage:, Example:, Help: on stderr, exit 2, nothing on stdout.
 ui_ok() { # ui_ok NAME COMMAND...   (UI_NOBAD=1: the command passes unknown options on)
@@ -340,7 +366,7 @@ ks_hook_ok() {
 	[ -z "$(bash "$KS" --hook --series-file "$d/TESTED-SERIES" --modules-root "$d/modules" 2>/dev/null)" ] ||
 		{ echo "notes on stdout"; return 1; }
 	[ "$(grep -c '^macbook91-facetimehd: note: ' <<<"$out")" = 3 ] || { echo "$out"; return 1; }
-	grep -qF 'not tested on Linux 7.4 (kernel 7.4.0-1-cachyos); tested series: 6.18, 7.3.' <<<"$out" &&
+	grep -qxF 'macbook91-facetimehd: note: the camera driver is not tested on Linux 7.4 (kernel 7.4.0-1-cachyos); tested series: 6.18, 7.3' <<<"$out" &&
 	grep -qF 'not tested on Linux 7.30 (kernel 7.30.1-1)' <<<"$out" &&
 	grep -qF 'not tested on kernel custom;' <<<"$out" &&
 	grep -qF '  If the camera misbehaves on that kernel, boot the LTS kernel.' <<<"$out" &&
