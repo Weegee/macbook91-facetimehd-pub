@@ -59,4 +59,4 @@ Hardware limit vs. software: native resolution = sensor size from `G_SELECTION`.
 | Supply chain | lockfile hashes, no `curl -k`, signed tags, reproducible tarball (two builds, same sha256) |
 | Other devices | the driver binds only 14e4:1570; `lspci -k` before/after, audio verification, Wi-Fi/BT unchanged |
 
-Tools: sparse, smatch, coccinelle, `scripts/checkpatch.pl`, clang `scan-build`, KASAN/lockdep/kmemleak kernels, `v4l2-compliance`. Currently not installed on the test machine: sparse, smatch, coccinelle (HARDWARE.md); a build in a temporary directory is planned.
+Tools: sparse, smatch, coccinelle, `scripts/checkpatch.pl`, clang `scan-build`, KASAN/lockdep/kmemleak kernels, `v4l2-compliance`. Not installed on the test machine when this plan was written: sparse, smatch, coccinelle (HARDWARE.md); a build in a temporary directory is planned.

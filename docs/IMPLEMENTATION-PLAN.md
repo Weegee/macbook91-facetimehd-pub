@@ -17,7 +17,7 @@ Rights legend: **U** = user, **R** = root (sudo/askpass), **R!** = root and a sy
 | B5 | Suspend with the camera open → `-EBUSY` (code) | measure (T8), possibly patch P1 | 5 |
 | B6 | A stuck ISP can only be freed by a cold boot (#326, 10,1) | order the tests so that a cold boot is available; check the recovery path | 4/5 |
 
-## Phase 1: Research and inventory — COMPLETED
+## Phase 1: Research and inventory (completed)
 
 Result: RESEARCH.md, HARDWARE.md, OPTIONS.md, TEST-PLAN.md, a project-state note, `docs/diag/`. Not carried out: hardware tests, downloads of proprietary data.
 
@@ -28,7 +28,7 @@ Result: RESEARCH.md, HARDWARE.md, OPTIONS.md, TEST-PLAN.md, a project-state note
 - Preconditions: approval of the plan. Files: repository root, `packaging/upstream.lock`.
 - Commands: `git init`, `git -C <clone> archive c9b063a | sha256sum`. Rights: U.
 - Result: a clean Git state, a reproducible source base. Risks: none.
-- Tests: `git status` clean, lock hash reproducible. Alternative: —. Effort: 0.5 h, priority high.
+- Tests: `git status` clean, lock hash reproducible. Alternative: none. Effort: 0.5 h, priority high.
 
 ### 2.2 Measurement baseline without the camera driver
 - Goal: reference values for battery and suspend before code is loaded.
@@ -54,7 +54,7 @@ Result: RESEARCH.md, HARDWARE.md, OPTIONS.md, TEST-PLAN.md, a project-state note
 - Commands: `make` in the extractor with the target directory variable, or manually `curl -r` + `xzcat` + `dd`; then `sha256sum`.
 - Rights: U.
 - Result: sha256 of `firmware.bin` = `240ef2e9…4330` (5.60.0), `1675_01XX.dat` = `b7a38aef…16d6`. A mismatch = abort.
-- Risks: Apple URL gone (currently HTTP 200); license (local use only).
+- Risks: Apple URL gone (HTTP 200 on 2026-10-13); license (local use only).
 - Tests: hash comparison, the extractor's header/footer check. Alternative: F4 (full DMG) as a cross-check, F2 (Boot Camp 01.55).
 - Effort: 1 h, priority high.
 
@@ -103,7 +103,7 @@ Every item starts only with measured evidence from phase 4/2.
 | 5.2 First frames dark/STREAMON slow | T4: latency > criterion | measure PR #356 on 0005/9774, possibly sensor-dependent | fthd_v4l2.c, fthd_isp.c | image errors at the start | stay at 200 ms |
 | 5.3 ISP hang | T7: open/close loop hangs | CH_RESET/restart path, timeouts, clean error return | fthd_isp.c | cold boot needed | module reload |
 | 5.4 Battery | T9: C-state loss > criterion | shut the ISP down after close; optionally runtime PM with `CMPE(0/1)` | fthd_drv.c, fthd_isp.c | ISP hang after restarting | load the module only when needed |
-| 5.5 Geometry | T3: distortion/crop wrong | aspect check, possibly a 16:9 window `[0,0][848,477]` only for 16:9 output | fthd_isp.c | — | upstream behaviour |
+| 5.5 Geometry | T3: distortion/crop wrong | aspect check, possibly a 16:9 window `[0,0][848,477]` only for 16:9 output | fthd_isp.c | none | upstream behaviour |
 
 Rights: U for code, R! for every test. Patches as `patches/NNNN-*.patch` with the measured evidence in the commit. Goal: send them upstream. Effort 2-8 h each, priority according to the finding.
 
@@ -150,7 +150,7 @@ Rights: U for code, R! for every test. Patches as `patches/NNNN-*.patch` with th
 
 ## Decision overview
 
-```
+```text
 Phase 2 → Phase 3 (F1) → Phase 4: G1/G3
   G1 PASS ─────────────────────────────→ Phase 7 → 8 → 9 (phase 5/6 only for suspend/battery/quality)
   Sensor 0 / firmware error → F2 (3.3) → phase 4 again

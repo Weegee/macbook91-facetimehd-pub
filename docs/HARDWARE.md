@@ -21,7 +21,7 @@ As of 2026-10-13, boot 0 since 2026-10-12 22:47. All commands read-only. Root co
 | BARs | BAR0 64 K, BAR2 256 M prefetch, BAR4 1 M | VERIFIED |
 | Driver bound | none; no modalias match in `modules.alias` | VERIFIED (`modprobe -R` fails) |
 | Power | `power_state=D0`, runtime `suspended`, `d3cold_allowed=1`, PM capability: D1, D3hot, no D3cold PME | VERIFIED |
-| MSI | present, currently off (no driver) | VERIFIED |
+| MSI | present, off (no driver) | VERIFIED |
 | ASPM | device and RP10 each `ASPM L1 Enabled` (result of `pcie_aspm=force`; the FADT reports "no ASPM") | VERIFIED (`diag/kernel-log-excerpt.txt`) |
 | AER/DevSta | `CorrErr+ UnsupReq+` set (cause unknown, possibly enumeration) | value VERIFIED, cause NOT VERIFIED |
 | ACPI node | `firmware_node/path` = `\_SB_.PCI0.RP10.CMRA` | VERIFIED |

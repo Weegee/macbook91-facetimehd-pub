@@ -70,36 +70,57 @@ conflict with `facetimehd-dkms` because both bind the same PCI ID.
 
 ## Installation (Arch Linux and derivatives)
 
-Install the headers of every kernel you use. Then build and install the driver
-package, and get Apple's firmware yourself (step 2).
+Requirements: `base-devel`, `dkms`, the headers of every kernel you use and,
+for kernels built with clang (some CachyOS kernels are), `clang`, `lld` and
+`llvm`. The module build refuses to run if the toolchain family does not match
+the kernel's, or if its sources do not match `SOURCES.sha256`. The camera
+needs Apple's firmware, which you fetch yourself (see "Firmware").
 
-### 1. Driver
+### Driver package
 
-Download `PKGBUILD`, `macbook91-facetimehd-dkms.install`, the source tarball
-`macbook91-facetimehd-<version>.tar` and `SHA256SUMS` from the latest release
-into one directory, check them and build the package:
+1. Open the [latest release](https://github.com/Weegee/macbook91-facetimehd-pub/releases/latest)
+   and download `PKGBUILD`, `macbook91-facetimehd-dkms.install`, the source
+   tarball `macbook91-facetimehd-VERSION.tar` and `SHA256SUMS` into one new
+   directory. VERSION is the release's version, for example `20261102.01`.
+2. In that directory, check the files:
 
-```sh
-sha256sum -c --ignore-missing SHA256SUMS
-makepkg -si          # needs base-devel, dkms and kernel headers
-```
+   ```sh
+   sha256sum -c --ignore-missing SHA256SUMS
+   ```
 
-`--ignore-missing` skips every file of `SHA256SUMS` that is not in the
-directory without a message, so a file you forgot to download does not fail
-the check as long as one listed file is present. Look at the output: three
-lines must read `OK`: `PKGBUILD`, `macbook91-facetimehd-dkms.install` and the
-source tarball. If one of them is missing or reads `FAILED`, do not run
-`makepkg`.
+   The output lists three files, each with `OK`:
 
-From a checkout the same files are in `release/<version>/`. To build from the
-source tree (needs network for the upstream driver; a release build needs a
-committed tree and the tarball's checksum pinned in `packaging/arch/PKGBUILD`;
-`make dist`, which `make arch-pkg` runs, needs a git checkout of the
-repository and does not work from an unpacked source tarball):
+   ```text
+   PKGBUILD: OK
+   macbook91-facetimehd-dkms.install: OK
+   macbook91-facetimehd-VERSION.tar: OK
+   ```
+
+   If one of them is missing or reads `FAILED`, do not run `makepkg`.
+   `--ignore-missing` skips the lines of `SHA256SUMS` whose files you did not
+   download without a message and exits successfully as soon as one listed
+   file is present, so the exit status alone does not show that the three
+   files were checked: look for the three `OK` lines.
+3. Build and install the package:
+
+   ```sh
+   makepkg -si
+   ```
+
+Checked on 2026-11-09, on the files of release 20261102.01: step 2 and
+`dkms status macbook91-facetimehd`. Not run for this revision of the text:
+step 3, the firmware download, loading the module and the removal. What has run
+on hardware, release by release, is under "What is proven, and what is not".
+
+From a checkout the same files are in `release/VERSION/`. To build from the
+source tree instead (needs network for the upstream driver; a release build
+needs a committed tree and the tarball's checksum pinned in
+`packaging/arch/PKGBUILD`; `make dist`, which `make arch-pkg` runs, needs a git
+checkout of the repository and does not work from an unpacked source tarball):
 
 ```sh
 make arch-pkg
-sudo pacman -U build/arch/macbook91-facetimehd-dkms-<version>-1-x86_64.pkg.tar.zst
+sudo pacman -U build/arch/macbook91-facetimehd-dkms-VERSION-1-x86_64.pkg.tar.zst
 ```
 
 `make arch-pkg-dev` builds an unreleased working tree (tracked files as they
@@ -108,7 +129,7 @@ ready-built package, install that with `sudo pacman -U` instead. The packages
 are not signed. If you maintain your own pacman repository, add the package to
 it as usual.
 
-### 2. Firmware: your own download, at your own responsibility
+### Firmware
 
 **The camera does not work without Apple's firmware, and this project does not
 contain or distribute it.** The firmware is Apple's proprietary software under
@@ -143,26 +164,93 @@ patjak/facetimehd-firmware (`make && sudo make install`, commit 60ee212 or
 later) installs the same firmware and the sensor set files.
 `macbook91-facetimehd-verify` checks the two files by hash either way.
 
-### 3. Load and check
+### Load and check
 
-Then load the module and check it:
+1. Check that DKMS built the module for every installed kernel. Each line must
+   end with `installed`:
+
+   ```sh
+   dkms status macbook91-facetimehd
+   ```
+
+2. Load the module, or reboot:
+
+   ```sh
+   sudo modprobe macbook91-facetimehd
+   ```
+
+3. Check the result. The last line must read `PASS`, with or without
+   warnings (the example output is under "Usage"):
+
+   ```sh
+   macbook91-facetimehd-verify
+   ```
+
+### Remove
+
+Remove the package, then reboot; the loaded module stays until then:
 
 ```sh
-sudo modprobe macbook91-facetimehd     # or reboot
+sudo pacman -R macbook91-facetimehd-dkms
+```
+
+Remove the firmware (only if you fetched it) and the option file (only if you
+created it, see "Configuration"):
+
+```sh
+sudo rm -r /usr/lib/firmware/facetimehd
+sudo rm /etc/modprobe.d/macbook91-facetimehd.conf
+```
+
+## Usage
+
+After the installation and after every kernel update, run the check; it reads
+and changes nothing and needs no root:
+
+```sh
 macbook91-facetimehd-verify
 ```
 
-Requires `dkms`, kernel headers matching the running kernel and, for kernels
-built with clang (some CachyOS kernels are), the packages `clang`, `lld` and
-`llvm`. The module
-build refuses to run if the toolchain family does not match the kernel's, or
-if its sources do not match `SOURCES.sha256`.
+It prints one line per check and ends with `PASS (N warnings)` or
+`FAIL (N failed, N warnings)`. Output of 2026-11-09 on the test machine with
+20261102.01 and `--no-capture`; the full run also captures 60 frames and checks
+the idle power-off (that run does not change what is recorded for the kernels
+below):
 
-To keep the camera powered while idle:
+```text
+macbook91-facetimehd verify (7.3.3-1-cachyos)
+  PASS  machine is MacBook9,1
+  PASS  macbook91-facetimehd-dkms 20261102.01-1 installed
+  PASS  firmware 5.60.0 and set file 1675 match their pinned SHA256
+  PASS  DKMS: macbook91-facetimehd/20261102.01, 7.3.3-1-cachyos, x86_64: installed
+  PASS  0000:03:00.0 is bound to macbook91_facetimehd
+  PASS  loaded module is 20261102.01+949038441c655353 (= /usr/src/macbook91-facetimehd-20261102.01)
+  ....  capture skipped (--no-capture)
+  PASS  kernel log: no macbook91_facetimehd errors this boot
+
+PASS (0 warnings)
+```
+
+`--help` and `--version` do what they say. Other tools:
+
+- `/usr/lib/macbook91-facetimehd/kernel-series` with the pacman hook
+  `71-macbook91-facetimehd-series.hook` (packaged): after a transaction that
+  installs or upgrades a kernel or this package, a note for every installed
+  kernel whose series is not in `TESTED-SERIES`. It builds and blocks nothing.
+- `tools/dev-*.sh`: helpers used while developing, run on the test machine
+  with sudo. Each has `--help`.
+
+## Configuration
+
+The module has one option, `idle_poweroff_ms`: the milliseconds without a
+stream after which the camera is powered off (default 5000, `-1` never). To
+keep the camera powered while idle, then reboot or reload the module:
 
 ```sh
 echo 'options macbook91_facetimehd idle_poweroff_ms=-1' | sudo tee /etc/modprobe.d/macbook91-facetimehd.conf
 ```
+
+Undo: delete that file, as under "Remove".
 
 ## Layout
 
@@ -182,20 +270,6 @@ echo 'options macbook91_facetimehd idle_poweroff_ms=-1' | sudo tee /etc/modprobe
 
 `STRUCTURE.md` holds the rules for these directories.
 
-## Tools
-
-- `macbook91-facetimehd-verify` (packaged): one PASS/FAIL over package,
-  firmware, DKMS build, loaded module identity, driver binding, a 60-frame
-  capture and idle power-off. Read-only, no root. The report goes to stdout,
-  the last line is `PASS (N warnings)` or `FAIL (N failed, N warnings)`;
-  `--no-capture` skips the capture, `--help` and `--version` do what they say.
-- `/usr/lib/macbook91-facetimehd/kernel-series` with the pacman hook
-  `71-macbook91-facetimehd-series.hook` (packaged): after a transaction that
-  installs or upgrades a kernel or this package, a note for every installed
-  kernel whose series is not in `TESTED-SERIES`. It builds and blocks nothing.
-- `tools/dev-*.sh`: helpers used while developing, run on the test machine
-  with sudo. Each has `--help`.
-
 ## What is proven, and what is not
 
 Measured on the test machine, recorded in `docs/measurements/` and `docs/test-status.json`:
@@ -213,7 +287,7 @@ Releases 20261013.02 (patch 0013), 20261014.01 (patch 0014) and
 public repository existed; they are not part of it.
 20261014.01 has been booted on the test machine: the module loads, streams, powers the
 camera off when idle and the kernel logs no deprecated-workqueue warning.
-Hang recovery, `rmmod`, suspend and the new error paths of 0015/0016 have
+Hang recovery, `rmmod`, suspend and the error paths of 0015 and 0016 have
 not been run on hardware with these patches (`docs/test-status.json`:
 `hw.patch_0013`, `hw.patch_0014`, `hw.patch_0015_0016`, all NOT_RUN).
 
@@ -251,6 +325,13 @@ The project started on 2026-10-13 as `facetimehd-macbook91` and was renamed
 the same day to `macbook91-facetimehd`, to match the naming of its sibling
 project macbook91-cs4208. The module was called `facetimehd` until patch 0011. `docs/CHANGELOG.md` lists the
 releases.
+
+## Bug reports
+
+Open an issue at <https://github.com/Weegee/macbook91-facetimehd-pub/issues>.
+Name the kernel (`uname -r`), the package version
+(`pacman -Q macbook91-facetimehd-dkms`) and attach the output of
+`macbook91-facetimehd-verify`.
 
 ## Provenance and licensing
 
