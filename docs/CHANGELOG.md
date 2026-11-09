@@ -3,7 +3,31 @@
 Versions have the form YYYYMMDD.NN (release date, NN counts releases that
 day). The release tag is v<version>.
 
-## 20261102.01
+## 20261109.01 (2026-11-09)
+
+The documentation follows the house HIG, documentation part. **No driver
+change:** the same upstream commit c9b063a and patches 0001-0017 as
+20261102.01; `patches/`, `packaging/overlay/`, `packaging/upstream.lock`, the
+module tree and the packaged tools are unchanged. Built and tested in
+software; NOT RUN on hardware (`docs/test-status.json`,
+`hw.release_20261109_01`).
+
+- README: the installation is a list of numbered steps with the requirements
+  first, the expected output of the checksum command, the check after the
+  install and a "Remove" section with the way back. New sections "Usage"
+  (with the output of `macbook91-facetimehd-verify`), "Configuration"
+  (`idle_poweroff_ms`) and "Bug reports". The README names what was run for
+  this revision (the checksum step, `dkms status`) and what was not.
+- CHANGELOG: every version heading carries its ISO date, and the entries with
+  an incompatible change name it in bold first (20261026.02, 20261021.01). The
+  20261013.01 entry no longer says that the firmware package is built from
+  `packaging/firmware/`; 20261021.01 removed it.
+- `docs/`: the code block in `docs/IMPLEMENTATION-PLAN.md` has a language, its
+  em dashes are replaced, and time-bound words ("currently") in
+  `docs/IMPLEMENTATION-PLAN.md`, `docs/HARDWARE.md` and `docs/TEST-PLAN.md` are
+  replaced by a date or removed.
+
+## 20261102.01 (2026-11-02)
 
 Install message on an upgrade, and the references to the house HIG. No driver
 change.
@@ -27,10 +51,17 @@ change.
   firmware warning, silence when the firmware is there) and the note line of
   the hook.
 
-## 20261026.02
+## 20261026.02 (2026-10-26)
 
 Text interfaces follow the house guidelines for terminal output. No driver
 change.
+
+**Incompatible:** for scripts that call the tools:
+`macbook91-facetimehd-fetch-firmware` writes its notice and question to stderr (it wrote the notice to stdout) and,
+without a terminal on stdin and stderr and without `--yes`, stops with exit
+status 2 (it stopped with exit status 1); pass `--yes` in scripts.
+`tools/dev-cam-load.sh` and `tools/dev-cam-unload.sh` exit with status 1 when
+insmod or rmmod failed (they exited with status 0). Details in the list below.
 
 - Driver: the same upstream commit c9b063a and patches 0001-0017 as
   20261026.01; module source identity 949038441c655353 and the whole module
@@ -84,7 +115,7 @@ change.
   quiet run, file modes, a damaged part, a failed download, SIGTERM); the shape
   of the install message.
 
-## 20261026.01
+## 20261026.01 (2026-10-26)
 
 Kernel series note. No driver change.
 
@@ -109,10 +140,16 @@ Kernel series note. No driver change.
   tested and untested series, the exit codes, the hook file and the installed
   paths.
 
-## 20261021.01
+## 20261021.01 (2026-10-21)
 
 First release prepared for a public repository. Documentation, licensing and
 packaging only, no driver logic change.
+
+**Incompatible:** the driver package no longer depends on a firmware package
+and downloads nothing during a build. After the installation, run
+`sudo macbook91-facetimehd-fetch-firmware` once, on your own responsibility
+(README, "Firmware"). The separate firmware package recipe is removed, and the
+four development helpers are now `tools/dev-*.sh`.
 
 Commit hashes named in entries up to 20261021.01 belong to the maintainer's private history and do not exist in the public repository.
 
@@ -167,7 +204,7 @@ Commit hashes named in entries up to 20261021.01 belong to the maintainer's priv
   and 20261020.01, because the driver sources are byte-identical (see
   `docs/test-status.json`, `hw.release_20261021_01`).
 
-## 20261020.02
+## 20261020.02 (2026-10-20)
 
 - Documentation only, no driver change: the same upstream commit and
   patches 0001-0017 as 20261020.01, module source identity
@@ -185,7 +222,7 @@ Commit hashes named in entries up to 20261021.01 belong to the maintainer's priv
 - Runtime of the 20261020.02 build itself: not run. The evidence of
   20261020.01 carries over because the module source is identical.
 
-## 20261020.01
+## 20261020.01 (2026-10-20)
 
 - No driver change: the same upstream commit and patches 0001-0017 as
   20261019.01. The packaged README says that 20261015.01 also went out
@@ -208,7 +245,7 @@ Commit hashes named in entries up to 20261021.01 belong to the maintainer's priv
   the sealed release records and the git history stay as they were. No
   packaged file changed.
 
-## 20261019.01
+## 20261019.01 (2026-10-19)
 
 - 0017 VIDIOC_ENUM_FRAMESIZES lists fixed sizes (320x240, 424x240,
   640x360, 640x480, 848x480, 1280x720 where they fit the sensor, and the
@@ -217,7 +254,7 @@ Commit hashes named in entries up to 20261021.01 belong to the maintainer's priv
   then drop the camera, so it was missing in Chromium-based browsers and
   WhatsApp Web calls reported no camera. Tested on the test machine with a test module.
 
-## 20261015.01
+## 20261015.01 (2026-10-15)
 
 - 0015 VIDIOC_S_FMT returns EBUSY while the queue has buffers; it used
   to change the format under a running stream, and the next stream
@@ -230,7 +267,7 @@ Commit hashes named in entries up to 20261021.01 belong to the maintainer's priv
   20261013.02 and 20261014.01; the test for deprecated workqueues also
   rejects system_unbound_wq.
 
-## 20261014.01
+## 20261014.01 (2026-10-14)
 
 - 0014 the idle power-off, frame watchdog and recovery are queued on
   system_dfl_wq (system_unbound_wq before 6.17) instead of system_wq,
@@ -241,7 +278,7 @@ Commit hashes named in entries up to 20261021.01 belong to the maintainer's priv
 - dkms.conf no longer sets CLEAN, which dkms 3 ignores and reports as
   deprecated on every build.
 
-## 20261013.02
+## 20261013.02 (2026-10-13)
 
 - 0013 remove/shutdown no longer leaves a recovery queued when stopping a
   hung firmware times out (use-after-free), STREAMON during remove is
@@ -249,13 +286,13 @@ Commit hashes named in entries up to 20261021.01 belong to the maintainer's priv
   missing one instead of crashing. Builds for 7.2.9-2 and 6.18.55-2-LTS;
   on hardware NOT VERIFIED.
 
-## 20261013.01
+## 20261013.01 (2026-10-13)
 
 First release. Package `macbook91-facetimehd-dkms`; it depends on
-`macbook91-facetimehd-firmware`. At that time the firmware files were held in
-a separate repository, independent of Apple's servers. The firmware package is
-now built from `packaging/firmware/`, which downloads the files from Apple
-at build time and checks pinned hashes (see README.md).
+`macbook91-facetimehd-firmware`. The firmware files were first held in a
+separate repository, independent of Apple's servers, and later built from
+`packaging/firmware/`, which downloaded them from Apple at build time and
+checked pinned hashes. 20261021.01 removed that recipe.
 
 Driver: patjak/facetimehd c9b063a with patches
 
