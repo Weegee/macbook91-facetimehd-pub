@@ -1,0 +1,55 @@
+macbook91-facetimehd 20261109.01-1 - RELEASED (tag v20261109.01, 2026-11-09): documentation follows the house HIG, documentation part; no driver change; released without a hardware gate, runtime carried over
+
+Change against 20261102.01: no driver change. The module tree of both source
+tarballs is identical in all files of src/ (source ID 949038441c655353),
+checked with diff -r over the two extracted tarballs; patches/,
+packaging/overlay/ and packaging/upstream.lock are unchanged. The tarball
+differs in two files, README.md and VERSION.
+What changed (details in docs/CHANGELOG.md):
+- README: the installation is a list of numbered steps with the requirements
+  first, the expected output of the checksum command, the check after the
+  install and a Remove section with the way back. New sections Usage (output
+  of macbook91-facetimehd-verify), Configuration (idle_poweroff_ms) and Bug
+  reports.
+- docs/CHANGELOG.md: ISO date in every version heading, incompatible changes
+  named first (20261026.02, 20261021.01). The other files of docs/ lose a code
+  block without a language, em dashes and time-bound words.
+Driver: patjak/facetimehd c9b063a with patches 0001-0017. Depends on dkms.
+
+Verified (2026-11-09, running kernel 7.3.3-1-cachyos, no hardware test):
+tests/run-tests.sh 60 passed, 0 failed, 3 blocked (hardware) on the committed
+tree with the pinned tarball 276f249af474..., including mkdist.py writing
+byte-identical tarballs and the module build for the running kernel (the
+module builds as 20261109.01+949038441c655353). make arch-pkg ok with the
+pinned tarball; makepkg --printsrcinfo equals .SRCINFO; makepkg --verifysource
+passes; namcap on the package: no errors, the three warnings in
+docs/NAMCAP.md; namcap on the PKGBUILD: nothing. The checksum step of the
+README (sha256sum -c --ignore-missing SHA256SUMS) was run on the files of
+release 20261102.01: three lines OK.
+
+Runtime: NOT RUN for 20261109.01 on any kernel; the hardware gate was not run
+and the release was made without it. The driver evidence carries over because
+the module source is byte-identical to 20261102.01 and earlier releases back to
+20261021.01 (same source ID 949038441c655353): 7.2.11-1-cachyos with
+20261021.01 (macbook91-facetimehd-verify PASS with 0 warnings,
+docs/test-status.json hw.install_20261021_01) and 6.18.55-2-cachyos-lts with
+20261020.01 (verify PASS, hw.lts_kernel). On 7.3.0-4-cachyos, 20261021.01 was
+built by DKMS and loaded and probed the camera without kernel errors
+(hw.kernel_7_3_probe). On 2026-11-09, 20261102.01 was installed on the test
+machine, DKMS showed it installed for 6.18.60-2-cachyos-lts and
+7.3.3-1-cachyos, and macbook91-facetimehd-verify --no-capture on 7.3.3-1 gave
+PASS (0 warnings); that run skips the capture and the idle power-off check.
+
+Not verified: pacman -U of this package; the real firmware download from
+updates.cdn-apple.com with the reworked fetch script (tested only against
+synthetic data); the pacman hook in a real transaction; the DKMS build of this
+package by dkms itself; macbook91-facetimehd-verify with capture on 7.3;
+suspend and resume on 6.18 and 7.3; suspend and hang recovery with patches
+0013-0017 on any kernel; the Apple license terms for the firmware files; the
+README step 3 and the removal as written (not run for this revision).
+
+Only this release directory is kept; earlier release directories are not
+part of this repository.
+
+Local build of the driver package (not tracked, not covered by SHA256SUMS, not published as a release file).
+7fee168e3fe5fb0223172224a70b757ceefa49eb76438b597f0af6d7f464da6a  macbook91-facetimehd-dkms-20261109.01-1-x86_64.pkg.tar.zst
