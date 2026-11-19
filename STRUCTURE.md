@@ -1,7 +1,7 @@
 Structure version: 20261109.01
 
-Layout rules for this repository. The README describes the same directories
-for a reader; this file is the rule.
+Layout rules for this repository. This file is the rule; the README is
+for users and does not list directories.
 
 patches/            numbered patches on top of the upstream commit that
                     packaging/upstream.lock pins (patjak/facetimehd c9b063a).
@@ -45,9 +45,9 @@ LICENSE, LICENSES/  LICENSE is the GPL-3.0 text (same file as
                     GPL-2.0-only (upstream driver, patches/, the firmware
                     extractor), GPL-2.0-or-later (packaging/overlay/). Every own file
                     with comment syntax starts with an SPDX-License-Identifier
-                    line, after the shebang if there is one; README.md
-                    "Provenance and licensing" maps every path. A new license
-                    needs its text in LICENSES/ and a row in that table.
+                    line, after the shebang if there is one; docs/LICENSING.md
+                    maps every path. A new license needs its text in
+                    LICENSES/ and a row in that table.
 tools/              macbook91-facetimehd-verify and macbook91-facetimehd-fetch-firmware
                     are packaged to /usr/bin. macbook91-facetimehd-kernel-series
                     (the only reader of TESTED-SERIES) is packaged to
@@ -69,10 +69,12 @@ release/<pkgver>/   the current release: PKGBUILD, .SRCINFO, source tarball,
                     Apple's firmware is never here and never a release asset:
                     the user downloads it with
                     tools/macbook91-facetimehd-fetch-firmware.
-docs/               research, hardware facts, options, plan, design
-                    (POWER-RECOVERY.md), measurements, changelog, test
-                    status. Every claim is tagged VERIFIED / NOT VERIFIED /
-                    REFUTED.
+docs/               user pages (INSTALL.md, STATUS.md, LICENSING.md,
+                    CHANGELOG.md) and developer pages: research, hardware
+                    facts, test plan, design (POWER-RECOVERY.md),
+                    measurements, test status. Every claim is tagged
+                    VERIFIED / NOT VERIFIED / REFUTED. A new feature
+                    changes the user page it concerns in the same commit.
 docs/diag/          sanitized diagnostic excerpts: system output and short
                     excerpts of Apple's ACPI tables, quoted for
                     interoperability research (no serials, no LUKS UUIDs,

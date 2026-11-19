@@ -64,7 +64,7 @@ done
 [ $# -le 2 ] || usage_error "unexpected argument '$3'"
 
 KO=$1 FWROOT=$2
-[ -r "$KO" ] || { err "cannot read the module file $KO" "Check the path, or build the module first (docs/IMPLEMENTATION-PLAN.md)."; exit 1; }
+[ -r "$KO" ] || { err "cannot read the module file $KO" "Check the path, or build the module first."; exit 1; }
 [ -d "$FWROOT/facetimehd" ] || { err "$FWROOT/facetimehd is not a directory" "FIRMWARE_ROOT must contain facetimehd/firmware.bin."; exit 1; }
 [ "$(id -u)" = 0 ] || { err "loading a module needs root" "Run it with sudo: sudo $0 $KO $FWROOT"; exit 1; }
 

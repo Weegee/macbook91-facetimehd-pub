@@ -1,319 +1,133 @@
 # Changelog
 
-Versions have the form YYYYMMDD.NN (release date, NN counts releases that
-day). The release tag is v<version>.
+Versions have the form YYYYMMDD.NN (release date, NN counts releases that day). The release tag
+is v<version>. Entries say what changes for users. Commit hashes before 20261021.01 belong to the
+maintainer's private history. Runtime tests per release: `docs/test-status.json`.
 
 ## 20261109.01 (2026-11-09)
 
-The documentation follows the house HIG, documentation part. **No driver
-change:** the same upstream commit c9b063a and patches 0001-0017 as
-20261102.01; `patches/`, `packaging/overlay/`, `packaging/upstream.lock`, the
-module tree and the packaged tools are unchanged. Built and tested in
-software; NOT RUN on hardware (`docs/test-status.json`,
-`hw.release_20261109_01`).
+Documentation only; no driver change (same upstream commit c9b063a and patches 0001-0017 as
+20261102.01). Not run on hardware.
 
-- README: the installation is a list of numbered steps with the requirements
-  first, the expected output of the checksum command, the check after the
-  install and a "Remove" section with the way back. New sections "Usage"
-  (with the output of `macbook91-facetimehd-verify`), "Configuration"
-  (`idle_poweroff_ms`) and "Bug reports". The README names what was run for
-  this revision (the checksum step, `dkms status`) and what was not.
-- CHANGELOG: every version heading carries its ISO date, and the entries with
-  an incompatible change name it in bold first (20261026.02, 20261021.01). The
-  20261013.01 entry no longer says that the firmware package is built from
-  `packaging/firmware/`; 20261021.01 removed it.
-- `docs/`: the code block in `docs/IMPLEMENTATION-PLAN.md` has a language, its
-  em dashes are replaced, and time-bound words ("currently") in
-  `docs/IMPLEMENTATION-PLAN.md`, `docs/HARDWARE.md` and `docs/TEST-PLAN.md` are
-  replaced by a date or removed.
+- README: numbered install steps with the expected checksum output, a check after the install,
+  a "Remove" section, usage with the output of `macbook91-facetimehd-verify`, the one module
+  option and how to report bugs.
 
 ## 20261102.01 (2026-11-02)
 
-Install message on an upgrade, and the references to the house HIG. No driver
-change.
+No driver change.
 
-- Driver: the same upstream commit c9b063a and patches 0001-0017 as
-  20261026.02; `patches/`, `packaging/overlay/` and `packaging/upstream.lock`
-  are unchanged.
-- Pacman install message on an upgrade: it no longer prints "note: installed"
-  and the installation text (about 25 lines) every time. It gives one note
-  with the old and the new version and says that the loaded module is replaced
-  at the next boot or module reload, repeats the warnings that make the DKMS
-  build fail (no kernel headers, compiler missing), and warns in four lines
-  when Apple's firmware is missing. A firmware that is there is not announced.
-  The text of a first installation is unchanged.
-- `kernel-series --hook`: the first line of the note no longer ends with a
-  period; its words are the same.
-- The comments and test headings that name the house guideline say "house
-  HIG": its text part replaces the separate text HIG, the rule IDs are the
-  same.
-- Tests: the upgrade message (version step, no installation text, short
-  firmware warning, silence when the firmware is there) and the note line of
-  the hook.
+- The pacman install message on an upgrade is one short note: old and new version, that the
+  loaded module is replaced at the next boot or module reload, the warnings that make the DKMS
+  build fail, and four lines when Apple's firmware is missing. A first installation is unchanged.
+- `kernel-series --hook`: the first line of the note no longer ends with a period.
 
 ## 20261026.02 (2026-10-26)
 
-Text interfaces follow the house guidelines for terminal output. No driver
-change.
+No driver change. **Incompatible for scripts:** `macbook91-facetimehd-fetch-firmware` writes its
+notice and question to stderr (it wrote the notice to stdout) and, without a terminal and without
+`--yes`, stops with exit status 2 (it was 1); pass `--yes` in scripts. `tools/dev-cam-load.sh`
+and `dev-cam-unload.sh` exit with 1 when insmod or rmmod failed (they exited with 0).
 
-**Incompatible:** for scripts that call the tools:
-`macbook91-facetimehd-fetch-firmware` writes its notice and question to stderr (it wrote the notice to stdout) and,
-without a terminal on stdin and stderr and without `--yes`, stops with exit
-status 2 (it stopped with exit status 1); pass `--yes` in scripts.
-`tools/dev-cam-load.sh` and `tools/dev-cam-unload.sh` exit with status 1 when
-insmod or rmmod failed (they exited with status 0). Details in the list below.
-
-- Driver: the same upstream commit c9b063a and patches 0001-0017 as
-  20261026.01; module source identity 949038441c655353 and the whole module
-  tree unchanged.
-- Every command answers `--help` (full help on stdout, exit 0, wins over other
-  arguments) and `--version` (`NAME VERSION`). An unknown or malformed
-  argument is a usage error: exit status 2 and, on stderr, the error, a
-  `Usage:` and an `Example:` line and `Help: NAME --help`. A near miss names
-  the intended option (`macbook91-facetimehd-verify --nocapture`). Ctrl+C and
-  SIGTERM end the tools with `NAME: cancelled` and exit status 130 and 143.
-  This covers `macbook91-facetimehd-verify`, `macbook91-facetimehd-fetch-firmware`,
-  `/usr/lib/macbook91-facetimehd/kernel-series`, `tools/dev-*.sh`, the scripts
-  in `packaging/` and `tests/run-tests.sh`.
-- Changed for scripts that call the tools:
-  - `macbook91-facetimehd-fetch-firmware`: the notice and the question go to
-    stderr (the notice went to stdout, the answer was read from the terminal
-    device even when stdin was a pipe). Unless stdin and stderr are terminals,
-    and without `--yes`, it stops with exit status 2 and "confirmation needed,
-    but there is no terminal" (it stopped with exit 1 and "aborted, nothing
-    downloaded"). New options: `-y/--yes`, `--no-input`, `-q/--quiet`,
-    `-o/--output DIR`, `--keep DIR` and `--timeout SEC`; a stalled download
-    ends after 30 s without data (there was no limit). Progress and the result
-    line go to stderr, stdout stays empty. Every downloaded part is checked
-    before anything is written to the output directory, as the script header
-    always said. The positional `OUTDIR [KEEPDIR]` still works.
-  - `macbook91-facetimehd-verify`: the report format is unchanged; plurals are
-    right (`1 workqueue warning`, `PASS (1 warning)`; these were
-    `1 workqueue warnings` and `PASS (1 warnings)`).
-  - `tools/dev-cam-load.sh` and `dev-cam-unload.sh`: the `insmod rc=N` and
-    `rmmod rc=N` lines are unchanged, but the exit status is now 1 when
-    insmod or rmmod failed (it was 0). All four `tools/dev-*.sh` refuse to run
-    without root instead of failing halfway.
-  - `packaging/mkdist.py`: `--out` without a value is a usage error, not a
-    traceback; errors read `mkdist.py: error: ...` with a hint. The line
-    `SHA256  PATH` on stdout is unchanged. `packaging/promote-release.sh`,
-    `fetch-upstream.sh` and `make-package.sh` follow the same message form;
-    their status lines go to stderr; `fetch-upstream.sh` gets `--timeout`.
-  - The pacman install message uses `macbook91-facetimehd: warning: ...` and
-    `note: ...` headings without a banner or capitals for emphasis; the text,
-    the commands and the legal notice are the same.
-- Unchanged on purpose: the text of the kernel-series hook note, the
-  PASS/FAIL/WARN lines of verify, the summary line of the test suite.
-- Deviations, named in the code: `Abweichung von EIN-3` (the firmware prompt
-  wants the typed word `yes`, not `[y/N]`: it is consent to Apple's license
-  terms); `Abweichung von ARG-3` (positional `OUTDIR [KEEPDIR]` kept for
-  compatibility); `Abweichung von FEH-2` (the `ERROR:` lines of the DKMS module
-  Makefile stay, because that file is part of the module tree this release
-  keeps byte-identical; they change with the next driver change).
-- Tests: `--help`, `--version` and the usage error for every command; the
-  firmware script end to end on synthetic data (no network, no Apple file:
-  quiet run, file modes, a damaged part, a failed download, SIGTERM); the shape
-  of the install message.
+- Every command answers `--help` and `--version`. A wrong argument is a usage error: exit status
+  2, the error, a `Usage:` and an `Example:` line, and a near miss names the intended option.
+  Ctrl+C and SIGTERM end the tools with `NAME: cancelled` (exit 130 and 143).
+- `macbook91-facetimehd-fetch-firmware` gets `-y/--yes`, `--no-input`, `-q/--quiet`,
+  `-o/--output DIR`, `--keep DIR` and `--timeout SEC`; a stalled download ends after 30 s
+  (there was no limit); progress goes to stderr, stdout stays empty.
+- `macbook91-facetimehd-verify`: the report format is unchanged; plurals are right
+  (`PASS (1 warning)`).
+- All `tools/dev-*.sh` refuse to run without root instead of failing halfway.
 
 ## 20261026.01 (2026-10-26)
 
-Kernel series note. No driver change.
+No driver change.
 
-- Driver: the same upstream commit c9b063a and patches 0001-0017 as
-  20261021.01; module source identity 949038441c655353 unchanged.
-- The DKMS tree carries `TESTED-SERIES` (from `packaging/overlay/`): the
-  kernel series on which `macbook91-facetimehd-verify` passed on the test
-  machine, 6.18 and 7.2. DKMS still builds the driver for every kernel;
-  `dkms.conf` sets no `BUILD_EXCLUSIVE_KERNEL`.
-- New pacman hook `71-macbook91-facetimehd-series.hook` with
-  `/usr/lib/macbook91-facetimehd/kernel-series`, the only reader of that list:
-  after a transaction that installs or upgrades a kernel or this package it
-  prints a two-line note for every installed kernel of a series not in the
-  list, with the tested series and the LTS kernel as the fallback. It builds
-  and blocks nothing and never fails the transaction. A series joins the list
-  in a later release, after a verify PASS on it.
-- Kernel 7.3: on 7.3.0-4-cachyos DKMS built 20261021.01, the module loaded and
-  probed the camera (firmware and set file loaded, no driver errors in that
-  boot). Capture, idle power-off and suspend were not run on 7.3, so 7.3 is
-  not in the list and the hook names 7.3 kernels.
-- Tests: hermetic tests of the list, the note on a simulated kernel tree with
-  tested and untested series, the exit codes, the hook file and the installed
-  paths.
+- New: the DKMS tree lists the kernel series the driver is tested on (`TESTED-SERIES`: 6.18 and
+  7.2), and a pacman hook (`71-macbook91-facetimehd-series.hook`) prints a note for every
+  installed kernel of another series after a kernel or package transaction. It builds and blocks
+  nothing; DKMS still builds for every kernel.
+- Kernel 7.3: DKMS built the module and it probed the camera; capture, idle power-off and
+  suspend were not run, so 7.3 is not in the list.
 
 ## 20261021.01 (2026-10-21)
 
-First release prepared for a public repository. Documentation, licensing and
-packaging only, no driver logic change.
+First release prepared for a public repository. No driver logic change (module source identity
+949038441c655353 unchanged).
 
-**Incompatible:** the driver package no longer depends on a firmware package
-and downloads nothing during a build. After the installation, run
-`sudo macbook91-facetimehd-fetch-firmware` once, on your own responsibility
-(README, "Firmware"). The separate firmware package recipe is removed, and the
-four development helpers are now `tools/dev-*.sh`.
+**Incompatible:** the driver package no longer depends on a firmware package and downloads
+nothing during a build. After the install, run `sudo macbook91-facetimehd-fetch-firmware` once,
+on your own responsibility. The four development helpers are now `tools/dev-*.sh`.
 
-Commit hashes named in entries up to 20261021.01 belong to the maintainer's private history and do not exist in the public repository.
-
-- Driver: the same upstream commit c9b063a and patches 0001-0017 as
-  20261020.02. Module source identity 949038441c655353 and `SOURCES.sha256`
-  are unchanged, and the unpacked module trees of the two source tarballs
-  are identical. The tarball differs from 20261020.02 in README.md, the
-  Makefile (`make install` also installs the firmware fetch script), VERSION,
-  `tools/macbook91-facetimehd-verify` and the new
-  `tools/macbook91-facetimehd-fetch-firmware`.
-- Firmware: the package no longer depends on a firmware package and nothing
-  downloads Apple's firmware during a build. The driver package installs
-  `macbook91-facetimehd-fetch-firmware`; the user runs it after the install,
-  on their own responsibility (Apple's license terms were not verified). It
-  asks for an explicit `yes`, downloads Apple's update from Apple's server,
-  checks four pinned hashes and writes the firmware to
-  `/usr/lib/firmware/facetimehd/`. The install message says so prominently
-  whenever the firmware is missing. `macbook91-facetimehd-verify` no longer
-  looks for a firmware package; it checks the two files by hash and names the
-  fetch command when they are missing. The separate firmware package recipe
-  (`packaging/firmware/`) was removed. The extraction is the one a real
-  `makepkg` build of that recipe ran once on 2026-10-20 (both files equal to
-  the installed ones by `cmp`). No Apple firmware, other Apple binary or
-  Apple code is in the repository, the tarball or a release.
-- ACPI: the decompiled excerpts of the test machine's ACPI tables (Apple's
-  code) are no longer part of the repository; `docs/HARDWARE.md` describes
-  what those methods do in this project's own words.
-- `docs/HARDWARE.md` corrected: the wait for the link to come up after
-  `CMPE(1)` is up to 1 s, polled every 10 ms (it said up to 10 s), as the
-  decompiled DSDT shows. `STRUCTURE.md` and `docs/FIRMWARE.md` say that no
-  Apple firmware or other Apple binary is tracked or released. The README says that the private releases 20261013.02 to
-  20261015.01 were released without the hardware gate, not published.
-- Patches 0007-0016: header text only (session links and a host name
-  removed), hunks unchanged; the ten patch hashes in `packaging/upstream.lock`
-  were regenerated.
-- Licenses: `LICENSES/GPL-3.0-or-later.txt` added; an unused MIT text
-  removed; the README license table lists the files of this repository. The
-  extractor is GPL-2.0-only, as it is adapted from the upstream firmware
-  project.
-- Text: install instructions that build the package from the release files
-  or the source tree, with a checksum step that lists the lines that must
-  read OK and the note that `make dist` needs a git checkout, an
-  AI-assistance note, neutral wording in the documentation, the four
-  host-named development helpers renamed to `tools/dev-*.sh`, agent working
-  notes no longer part of this repository.
-  "No Apple code is copied" is replaced by an accurate statement: no Apple
-  binaries are included, and short excerpts of Apple's ACPI tables are
-  quoted in `docs/diag/` for interoperability research.
-- Release directory: only `release/20261021.01/` is kept. Earlier release
-  directories are not part of this repository.
-- Runtime of the 20261021.01 build: not run. Carried over from 20261020.02
-  and 20261020.01, because the driver sources are byte-identical (see
-  `docs/test-status.json`, `hw.release_20261021_01`).
+- `macbook91-facetimehd-fetch-firmware` asks for an explicit `yes`, downloads Apple's update
+  from Apple's server, checks four pinned hashes and writes the firmware to
+  `/usr/lib/firmware/facetimehd/`. The install message says so whenever the firmware is missing.
+- `macbook91-facetimehd-verify` checks the two firmware files by hash and names the fetch
+  command when they are missing.
+- Licenses: own files GPL-3.0-or-later, the module's build files GPL-2.0-or-later, driver and
+  patches GPL-2.0-only (`docs/LICENSING.md`). The decompiled ACPI excerpts are no longer in the
+  repository; `docs/HARDWARE.md` describes those methods in the project's own words.
+- `docs/HARDWARE.md` corrected: the wait for the link after `CMPE(1)` is up to 1 s, not 10 s.
+- Not run on hardware; carried over from 20261020.02 because the driver sources are identical.
 
 ## 20261020.02 (2026-10-20)
 
-- Documentation only, no driver change: the same upstream commit and
-  patches 0001-0017 as 20261020.01, module source identity
-  949038441c655353 unchanged. Compared with 20261020.01 the source tarball
-  differs only in README.md and VERSION.
-- The packaged README states the 6.18 state. It said that the module builds
-  for 6.18-cachyos-lts and that kernel had not been booted with it. The
-  maintainer booted 6.18.55-2-cachyos-lts on the test machine on 2026-10-20 with
-  20261020.01: `macbook91-facetimehd-verify` PASS with 0 warnings, firmware
-  hashes match, 60 frames in 3008 ms, camera powered off after 5000 ms
-  idle, no module errors in that boot's kernel log. Suspend and resume on
-  6.18, with and without the camera open, were not run and are listed as
-  not verified. The verify tool's deprecated-workqueue check cannot fire on
-  6.18.
-- Runtime of the 20261020.02 build itself: not run. The evidence of
-  20261020.01 carries over because the module source is identical.
+Documentation only, no driver change. The README states that 6.18.55-2-cachyos-lts was booted
+with 20261020.01: `macbook91-facetimehd-verify` PASS with 0 warnings, 60 frames in 3008 ms,
+power-off after 5000 ms idle. Suspend on 6.18 was not run.
 
 ## 20261020.01 (2026-10-20)
 
-- No driver change: the same upstream commit and patches 0001-0017 as
-  20261019.01. The packaged README says that 20261015.01 also went out
-  without the hardware gate and that hang recovery, rmmod, suspend and the
-  error paths of 0015/0016 have not been run on hardware with these
-  patches. The install scriptlet's rollback hint uses sudo.
-- License: this project's own files (tools, tests, packaging, documentation,
-  data) are GPL-3.0-or-later, and `LICENSE` holds the GPL-3.0 text. The
-  module's Kbuild, Makefile and dkms.conf are GPL-2.0-or-later, because
-  GPLv2 section 3 counts the scripts that build and install a module as part
-  of its source. The driver and patches 0001-0017 stay GPL-2.0-only;
-  `LICENSES/` holds the license texts. Own files
-  with comment syntax start with an SPDX-License-Identifier line; README.md
-  maps every path. The PKGBUILD declares all three GPL identifiers, the
-  source tarball adds the two GPL-2.0 texts, and a test checks the license
-  texts and SPDX lines. The driver's source files are unchanged.
-- Language: the documentation was translated from German
-  into English; facts, dates and numbers are unchanged, and claims are
-  tagged VERIFIED / NOT VERIFIED / REFUTED. Captured German-locale output,
-  the sealed release records and the git history stay as they were. No
-  packaged file changed.
+No driver change.
+
+- Licenses: own files GPL-3.0-or-later with an SPDX line; the module's `Kbuild`, `Makefile` and
+  `dkms.conf` GPL-2.0-or-later (GPLv2 section 3); driver and patches GPL-2.0-only. `LICENSES/`
+  holds the texts.
+- The README says that 20261015.01 also went out without the hardware gate. The install
+  scriptlet's rollback hint uses sudo. The documentation is in English.
 
 ## 20261019.01 (2026-10-19)
 
-- 0017 VIDIOC_ENUM_FRAMESIZES lists fixed sizes (320x240, 424x240,
-  640x360, 640x480, 848x480, 1280x720 where they fit the sensor, and the
-  native size last, 848x588 on the MacBook9,1) instead of one stepwise
-  range. Chromium and libwebrtc's PipeWire camera skip stepwise sizes and
-  then drop the camera, so it was missing in Chromium-based browsers and
-  WhatsApp Web calls reported no camera. Tested on the test machine with a test module.
+- 0017: the driver lists fixed frame sizes (320x240, 424x240, 640x360, 640x480, 848x480 and the
+  native 848x588) instead of one stepwise range. Chromium and libwebrtc's PipeWire camera skip
+  stepwise sizes, so the camera was missing in Chromium-based browsers and WhatsApp Web calls.
+  Tested with a test module.
 
 ## 20261015.01 (2026-10-15)
 
-- 0015 VIDIOC_S_FMT returns EBUSY while the queue has buffers; it used
-  to change the format under a running stream, and the next stream
-  restart (recovery, resume) made the firmware write past the buffers.
-  Buffers smaller than a frame are refused.
-- 0016 writing to the debugfs file `debug` while the camera is powered
-  off returns EIO instead of crashing the kernel; the teardown stops the
-  frame watchdog after the interrupt work, and remove cancels it.
-- README and the project state say what the hardware has verified of
-  20261013.02 and 20261014.01; the test for deprecated workqueues also
-  rejects system_unbound_wq.
+- 0015: `VIDIOC_S_FMT` returns EBUSY while the queue has buffers (it changed the format under a
+  running stream, and the next restart made the firmware write past the buffers). Buffers smaller
+  than a frame are refused.
+- 0016: writing the debugfs file `debug` while the camera is off returns EIO instead of crashing
+  the kernel; the frame watchdog stops after the interrupt work, and remove cancels it.
 
 ## 20261014.01 (2026-10-14)
 
-- 0014 the idle power-off, frame watchdog and recovery are queued on
-  system_dfl_wq (system_unbound_wq before 6.17) instead of system_wq,
-  which kernel 7.2 reports as deprecated once per boot. Builds for
-  7.2.9-2 and 6.18.55-2-LTS.
-- macbook91-facetimehd-verify warns about kernel workqueue warnings that
-  name the module (they start with `workqueue:`, not with the module name).
-- dkms.conf no longer sets CLEAN, which dkms 3 ignores and reports as
-  deprecated on every build.
+- 0014: idle power-off, frame watchdog and recovery run on `system_dfl_wq` instead of
+  `system_wq`, which kernel 7.2 reports as deprecated.
+- `macbook91-facetimehd-verify` warns about kernel workqueue warnings that name the module.
+- `dkms.conf` no longer sets `CLEAN`, which dkms 3 reports as deprecated on every build.
 
 ## 20261013.02 (2026-10-13)
 
-- 0013 remove/shutdown no longer leaves a recovery queued when stopping a
-  hung firmware times out (use-after-free), STREAMON during remove is
-  refused, and a set file too large for its memory region is skipped like a
-  missing one instead of crashing. Builds for 7.2.9-2 and 6.18.55-2-LTS;
-  on hardware NOT VERIFIED.
+- 0013: remove and shutdown no longer leave a recovery queued when stopping a hung firmware times
+  out (use-after-free); STREAMON during remove is refused; a set file too large for its memory
+  region is skipped like a missing one instead of crashing. On hardware NOT VERIFIED.
 
 ## 20261013.01 (2026-10-13)
 
-First release. Package `macbook91-facetimehd-dkms`; it depends on
-`macbook91-facetimehd-firmware`. The firmware files were first held in a
-separate repository, independent of Apple's servers, and later built from
-`packaging/firmware/`, which downloaded them from Apple at build time and
-checked pinned hashes. 20261021.01 removed that recipe.
+First release: package `macbook91-facetimehd-dkms`, module `macbook91-facetimehd`. Driver:
+patjak/facetimehd c9b063a with
 
-Driver: patjak/facetimehd c9b063a with patches
-
-- 0001-0004 upstream PR #355 (IOMMU buffers inside a page, partial buffer
-  setup, no endless wait for buffers, comment)
-- 0005 isp_init/isp_uninit leak-free and repeatable
-- 0006 a signal is no longer a firmware timeout
-- 0007 hardware bring-up separated from probe, power cycle through ACPI
-  CMPE, recovery work, buffers survive a restart, debugfs `state`/`recover`
-- 0008 dev_pm_ops: a stream survives S3 and s2idle; s2idle powers the camera
-  off; asynchronous resume
-- 0009 hang detection: command timeout, 2 s frame watchdog, bounded
-  stop_streaming, debugfs `inject_hang`
+- 0001-0004 upstream PR #355 (IOMMU buffers inside a page, partial buffer setup, no endless wait
+  for buffers)
+- 0005-0006 leak-free, repeatable firmware start and stop; a signal is no longer a firmware
+  timeout
+- 0007-0008 power cycle through ACPI `CMPE`, recovery work, a stream survives S3 and s2idle
+- 0009 hang detection: command timeout, 2 s frame watchdog, bounded `stop_streaming`
 - 0010 idle power-off after `idle_poweroff_ms` (default 5000)
-- 0011 debugfs directory named after the module
-- 0012 module version = package version + source hash
+- 0011-0012 debugfs directory named after the module; module version = package version + source
+  hash
 
-Packaging: module `macbook91-facetimehd` (lsmod `macbook91_facetimehd`),
-DKMS tree checked against SOURCES.sha256 before every build, objects in
-`Kbuild` so that dkms 3 (which sets KERNELRELEASE) builds it, compiler family
-taken from the target kernel, `macbook91-facetimehd-verify` (checks the
-firmware against pinned hashes).
-
-Measurements: docs/measurements/2026-10-13-T0 and 2026-10-13-phase2.
+DKMS tree checked against `SOURCES.sha256` before every build. Measurements:
+`docs/measurements/2026-10-13-T0` and `2026-10-13-phase2`.
