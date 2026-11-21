@@ -314,7 +314,10 @@ while [ $# -gt 0 ]; do case $1 in -r) r=$2; shift ;; esac; shift; done
 [ -r "$MOCKDIR/$r.xz" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
 cat "$MOCKDIR/$r.xz"
 STUB
-	printf '#!/bin/sh\nexec sleep 30\n' > "$d/slow/curl"; chmod +x "$d/stub/curl" "$d/slow/curl"
+	# The slow stub writes a marker, then stalls: fetch has set its traps before it starts curl,
+	# so the marker says the signal can no longer arrive too early (even under load).
+	printf '#!/bin/sh\n: > "%s/slow.started"\nexec sleep 30\n' "$d" > "$d/slow/curl"
+	chmod +x "$d/stub/curl" "$d/slow/curl"
 	# 1. quiet run: nothing printed, files and modes as promised
 	out=$(MOCKDIR=$d/data PATH="$d/stub:$PATH" bash "$d/fetch" --yes -q "$d/out" "$d/keep" 2>&1 </dev/null); rc=$?
 	[ "$rc" = 0 ] && [ -z "$out" ] || { echo "-q run: exit $rc, output: $out"; return 1; }
@@ -336,7 +339,10 @@ STUB
 	[ ! -e "$d/out5" ] || { echo "failing download: exit $rc: $out"; return 1; }
 	# 5. SIGTERM during a stalled download: "cancelled", exit 143, nothing written
 	PATH="$d/slow:$PATH" bash "$d/fetch" --yes "$d/out4" >/dev/null 2>"$d/term.err" </dev/null &
-	pid=$!; sleep 1; kill -TERM "$pid"; wait "$pid"; rc=$?
+	pid=$!
+	for _ in $(seq 1 100); do [ -e "$d/slow.started" ] && break; sleep 0.1; done # up to 10 s
+	[ -e "$d/slow.started" ] || { kill -KILL "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; echo "SIGTERM: the download never started"; return 1; }
+	kill -TERM "$pid"; wait "$pid"; rc=$?
 	[ "$rc" = 143 ] && grep -q ': cancelled' "$d/term.err" && [ ! -e "$d/out4" ] || { echo "SIGTERM: exit $rc"; return 1; }
 }
 check "firmware fetch script on synthetic data: -q, stderr, modes, damaged part, failed download, SIGTERM 143" fw_mock_ok
@@ -446,7 +452,7 @@ if [ -d build/upstream/.git ] || git ls-remote -q "$(awk '$1 == "driver.repo" {p
 			rm -rf "$T/kb"; cp -a "$MOD_DIR" "$T/kb"
 			# As dkms 3 calls it: KERNELRELEASE on the command line, LLVM=1 for clang kernels.
 			local llvm=; grep -qx 'CONFIG_CC_IS_CLANG=y' "$KD/.config" && llvm=LLVM=1
-			make -s -C "$T/kb" KERNELRELEASE="$(uname -r)" KVERSION="$(uname -r)" KDIR="$KD" \
+			make -s -C "$T/kb" $(claude-jobs --make 2>/dev/null) KERNELRELEASE="$(uname -r)" KVERSION="$(uname -r)" KDIR="$KD" \
 				PKGVER="$VERSION" $llvm >/dev/null 2>&1 || return 1
 			[ "$(modinfo -F name "$T/kb/macbook91-facetimehd.ko")" = macbook91_facetimehd ] || return 1
 			modinfo -F version "$T/kb/macbook91-facetimehd.ko" | grep -qxE "$VERSION\+[0-9a-f]{16}"
