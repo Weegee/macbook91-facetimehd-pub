@@ -40,9 +40,20 @@ MODULES_ROOT=/usr/lib/modules
 MODE=''
 CMD=/usr/lib/macbook91-facetimehd/kernel-series
 
-fail() { printf 'macbook91-facetimehd: error: %s\n' "$*" >&2; exit 1; }
+# Presentation: on a terminal (stderr is a tty, NO_COLOR unset, TERM not dumb)
+# the error is red with a symbol and the note yellow; the prefix stays first
+# for pacman. A pipe, a file or the pacman log gets the plain text.
+red='' yellow='' reset='' s_fail='' s_warn=''
+if [ -t 2 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
+	red=$'\e[31m' yellow=$'\e[33m' reset=$'\e[0m'
+	case ${LC_ALL:-${LC_CTYPE:-${LANG:-}}} in
+		*[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) s_fail='✘ ' s_warn='▲ ' ;;
+		*) s_fail='x ' s_warn='! ' ;;
+	esac
+fi
+fail() { printf '%smacbook91-facetimehd: %serror: %s%s\n' "$red" "$s_fail" "$*" "$reset" >&2; exit 1; }
 usage() { # MESSAGE
-	printf 'macbook91-facetimehd: error: %s\n' "$*" >&2
+	printf '%smacbook91-facetimehd: %serror: %s%s\n' "$red" "$s_fail" "$*" "$reset" >&2
 	printf 'Usage: %s (--list|--hook) [--series-file FILE] [--modules-root DIR]\n' "$CMD" >&2
 	printf 'Example: %s --list\n' "$CMD" >&2
 	printf 'Help: %s --help\n' "$CMD" >&2
@@ -137,8 +148,8 @@ case "$MODE" in
 			else
 				what="kernel $rel"
 			fi
-			printf 'macbook91-facetimehd: note: the camera driver is not tested on %s; tested series: %s\n' \
-				"$what" "$list" >&2
+			printf '%smacbook91-facetimehd: %snote: the camera driver is not tested on %s; tested series: %s%s\n' \
+				"$yellow" "$s_warn" "$what" "$list" "$reset" >&2
 			printf '  If the camera misbehaves on that kernel, boot the LTS kernel.\n' >&2
 		done
 		;;

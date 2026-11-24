@@ -59,6 +59,9 @@ Options:
 Output:
   One line per check on stdout, marked PASS, FAIL, WARN or ....
   The last line is PASS (N warnings) or FAIL (N failed, N warnings).
+  On a terminal the lines use symbols and colour instead, problems are marked
+  in the first column and repeated under "To check:" before the last line.
+  A pipe, a file and NO_COLOR get the plain lines.
 
 Exit status:
   0    PASS, warnings allowed
@@ -108,11 +111,41 @@ trap 'on_signal TERM' TERM
 # count N SINGULAR PLURAL: "1 warning", "0 warnings"
 count() { if [ "$1" = 1 ]; then printf '1 %s' "$2"; else printf '%s %s' "$1" "$3"; fi; }
 
+# Presentation. On a terminal (stdout is a tty, NO_COLOR unset, TERM not dumb)
+# the report uses symbols and colour by role: passed checks dim, problems
+# marked in the first column and repeated before the result. A pipe or a file
+# gets the plain PASS/FAIL/WARN lines, which scripts may read.
+tty=0 mark='' reset='' dim='' red='' yellow='' green='' bold=''
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
+	tty=1 reset=$'\e[0m' dim=$'\e[2m' red=$'\e[31m' yellow=$'\e[33m' green=$'\e[32m' bold=$'\e[1m'
+	case ${LC_ALL:-${LC_CTYPE:-${LANG:-}}} in
+		*[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) s_pass='✔' s_fail='✘' s_warn='▲' s_info='·' mark='▸' ;;
+		*) s_pass='+' s_fail='x' s_warn='!' s_info='.' mark='>' ;;
+	esac
+fi
+
 fails=0 warns=0
-pass() { printf '  PASS  %s\n' "$*"; }
-fail() { printf '  FAIL  %s\n' "$*"; fails=$((fails + 1)); }
-warn() { printf '  WARN  %s\n' "$*"; warns=$((warns + 1)); }
-info() { printf '  ....  %s\n' "$*"; }
+problems=()
+pass() {
+	if [ "$tty" = 1 ]; then printf '  %s%s %s%s\n' "$dim" "$s_pass" "$*" "$reset"; else printf '  PASS  %s\n' "$*"; fi
+}
+fail() {
+	fails=$((fails + 1))
+	if [ "$tty" = 1 ]; then
+		printf '%s%s %s %s%s\n' "$red" "$mark" "$s_fail" "$*" "$reset"
+		problems+=("$red$mark $s_fail $*$reset")
+	else printf '  FAIL  %s\n' "$*"; fi
+}
+warn() {
+	warns=$((warns + 1))
+	if [ "$tty" = 1 ]; then
+		printf '%s%s %s %s%s\n' "$yellow" "$mark" "$s_warn" "$*" "$reset"
+		problems+=("$yellow$mark $s_warn $*$reset")
+	else printf '  WARN  %s\n' "$*"; fi
+}
+info() {
+	if [ "$tty" = 1 ]; then printf '  %s%s %s%s\n' "$dim" "$s_info" "$*" "$reset"; else printf '  ....  %s\n' "$*"; fi
+}
 
 echo "$PKG verify ($(uname -r))"
 
@@ -233,9 +266,16 @@ else
 fi
 
 echo
+if [ "$tty" = 1 ] && [ "${#problems[@]}" -gt 0 ]; then
+	echo "To check:"
+	printf '%s\n' "${problems[@]}"
+	echo
+fi
 if [ "$fails" = 0 ]; then
-	echo "PASS ($(count "$warns" warning warnings))"
+	result="PASS ($(count "$warns" warning warnings))"
+	if [ "$tty" = 1 ]; then printf '%s%s%s\n' "$bold$green" "$result" "$reset"; else echo "$result"; fi
 	exit 0
 fi
-echo "FAIL ($fails failed, $(count "$warns" warning warnings))"
+result="FAIL ($fails failed, $(count "$warns" warning warnings))"
+if [ "$tty" = 1 ]; then printf '%s%s%s\n' "$bold$red" "$result" "$reset"; else echo "$result"; fi
 exit 1

@@ -231,6 +231,34 @@ verify_wq_ok() {
 		grep -q 'WARN  kernel log: .* 1 workqueue warning naming macbook91_facetimehd'
 }
 check "verify warns about a workqueue warning naming the module" verify_wq_ok
+colour_ok() {
+	# House HIG: colour and symbols only on a terminal (a pty from script(1)); a pipe, a file
+	# and NO_COLOR get plain text without escape codes. Symbols and colour change no text
+	# that scripts read: the pipe lines keep PASS/FAIL/WARN and the exit codes.
+	command -v script >/dev/null || { echo "script(1) missing"; return 1; }
+	local esc=$'\e' out s k r
+	out=$(PATH="$T/stub:$PATH" tools/macbook91-facetimehd-verify --no-capture 2>&1)
+	grep -q "$esc" <<<"$out" && { echo "verify: escape codes in a pipe"; return 1; }
+	grep -q '^  WARN  kernel log' <<<"$out" || { echo "verify: pipe lines changed"; return 1; }
+	out=$(PATH="$T/stub:$PATH" script -qec 'env TERM=xterm LANG=C.UTF-8 tools/macbook91-facetimehd-verify --no-capture' /dev/null)
+	grep -q "${esc}\[3[13]m▸ [✘▲] " <<<"$out" && grep -q '^To check:' <<<"$out" || { echo "verify: no marked problems on a terminal"; return 1; }
+	out=$(PATH="$T/stub:$PATH" script -qec 'env NO_COLOR=1 TERM=xterm tools/macbook91-facetimehd-verify --no-capture' /dev/null)
+	grep -q "$esc" <<<"$out" && { echo "verify: NO_COLOR ignored"; return 1; }
+	# kernel-series: the note keeps its prefix and text; colour only on a terminal.
+	mkdir -p "$T/ks/m/9.9.9-x" && : > "$T/ks/m/9.9.9-x/vmlinuz" && printf '6.18\n' > "$T/ks/s" || return 1
+	k="bash tools/macbook91-facetimehd-kernel-series --hook --series-file $T/ks/s --modules-root $T/ks/m"
+	out=$($k 2>&1)
+	grep -q "$esc" <<<"$out" && { echo "kernel-series: escape codes in a pipe"; return 1; }
+	grep -q '^macbook91-facetimehd: note: the camera driver is not tested on Linux 9.9' <<<"$out" || { echo "kernel-series: note changed"; return 1; }
+	out=$(script -qec "env TERM=xterm LANG=C.UTF-8 $k" /dev/null)
+	grep -q "${esc}\[33mmacbook91-facetimehd: ▲ note: " <<<"$out" || { echo "kernel-series: no marked note on a terminal"; return 1; }
+	# fetch-firmware: the error line.
+	out=$("$FWX" --no-such-option 2>&1)
+	grep -q "$esc" <<<"$out" && { echo "fetch-firmware: escape codes in a pipe"; return 1; }
+	out=$(script -qec "env TERM=xterm LANG=C.UTF-8 $FWX --no-such-option" /dev/null)
+	grep -q "${esc}\[31m✘ .*: error: " <<<"$out" || { echo "fetch-firmware: no marked error on a terminal"; return 1; }
+}
+check "terminal output: colour and symbols only on a terminal, plain in a pipe and with NO_COLOR" colour_ok
 
 # --- text interfaces (house HIG) ------------------------------------------------
 # -h/--help: full help on stdout, exit 0, nothing on stderr. -V/--version: one line.

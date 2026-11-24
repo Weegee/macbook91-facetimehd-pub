@@ -95,8 +95,19 @@ EOF
 }
 
 # Message helpers: "prog: error: first line" plus indented follow-up lines.
+# Presentation: on a terminal (stderr is a tty, NO_COLOR unset, TERM not dumb)
+# the error line is red with a symbol, the notice yellow and the result line
+# green; a pipe or a file gets the plain text.
+red='' yellow='' green='' reset='' s_fail='' s_warn='' s_pass=''
+if [ -t 2 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
+	red=$'\e[31m' yellow=$'\e[33m' green=$'\e[32m' reset=$'\e[0m'
+	case ${LC_ALL:-${LC_CTYPE:-${LANG:-}}} in
+		*[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) s_fail='✘ ' s_warn='▲ ' s_pass='✔ ' ;;
+		*) s_fail='x ' s_warn='! ' s_pass='+ ' ;;
+	esac
+fi
 err() { # FIRST [MORE...]
-	printf '%s: error: %s\n' "$PROG" "$1" >&2
+	printf '%s%s%s: error: %s%s\n' "$red" "$s_fail" "$PROG" "$1" "$reset" >&2
 	shift
 	local l
 	for l in "$@"; do printf '  %s\n' "$l" >&2; done
@@ -188,7 +199,7 @@ if [ "$YES" != 1 ]; then
 		exit 2
 	fi
 	cat >&2 <<EOF
-$PROG: note: this downloads Apple software and extracts Apple's firmware
+$yellow$s_warn$PROG: note: this downloads Apple software and extracts Apple's firmware$reset
   The FaceTime HD camera needs Apple's firmware. This command downloads about
   18 MB of Apple's macOS 10.12.6 combo update from Apple's servers
   (updates.cdn-apple.com) and extracts the camera firmware from it.
@@ -273,5 +284,5 @@ if [ -n "$KEEP" ]; then
 	install -m600 "$T/AppleCameraInterface" "$T/AppleCameraAssistant" "$KEEP/"
 	say "Kept AppleCameraInterface and AppleCameraAssistant in $KEEP"
 fi
-say "firmware 5.60.0 and 1675_01XX.dat verified and written to $OUT"
+say "$green${s_pass}firmware 5.60.0 and 1675_01XX.dat verified and written to $OUT$reset"
 [ "$OUT" != "$DEFAULT_OUT/facetimehd" ] || say "Next: macbook91-facetimehd-verify"
