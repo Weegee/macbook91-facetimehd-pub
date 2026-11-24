@@ -1,0 +1,156 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Messages follow the house HIG (text part): "macbook91-facetimehd: warning: ..." or
+# "note: ..." as the first line, follow-up lines indented by two spaces, no
+# banners and no capitals for emphasis, commands on one line so they can be
+# copied. pacman prints what these functions write; there is no terminal
+# check and no prompt here.
+#
+# Whether clang/lld/llvm or gcc are needed is a property of the installed
+# kernels, not of this package: the module Makefile takes the compiler family
+# from the target kernel's own .config. Nothing is installed on anyone's
+# behalf; this says what is missing while the user is present, rather than
+# letting DKMS fail during the next kernel upgrade (same as macbook91-cs4208).
+_toolchain_note() {
+    local d need_clang=0 need_gcc=0 kernels=0
+    for d in /usr/lib/modules/*/build; do
+        [ -r "$d/.config" ] || continue
+        kernels=$((kernels + 1))
+        if grep -qx 'CONFIG_CC_IS_CLANG=y' "$d/.config"; then
+            need_clang=1
+        elif grep -qx 'CONFIG_CC_IS_GCC=y' "$d/.config"; then
+            need_gcc=1
+        fi
+    done
+
+    if [ "$kernels" -eq 0 ]; then
+        cat <<'MSG'
+
+macbook91-facetimehd: warning: no kernel headers found
+  DKMS has nothing to build against. Install the headers that match your
+  kernel, for example:
+    sudo pacman -S linux-cachyos-headers      # CachyOS default kernel
+    sudo pacman -S linux-cachyos-lts-headers  # CachyOS LTS
+    sudo pacman -S linux-headers              # Arch default kernel
+    sudo pacman -S linux-lts-headers          # Arch LTS
+MSG
+        return
+    fi
+
+    if [ "$need_clang" = 1 ] && ! command -v clang >/dev/null 2>&1; then
+        cat <<'MSG'
+
+macbook91-facetimehd: warning: the compiler for an installed kernel is missing
+  An installed kernel is built with clang (CONFIG_CC_IS_CLANG=y), which the
+  CachyOS kernels are. Its modules cannot be compiled with GCC, so the build
+  needs:
+    sudo pacman -S clang lld llvm
+MSG
+    fi
+
+    if [ "$need_gcc" = 1 ] && ! command -v gcc >/dev/null 2>&1; then
+        cat <<'MSG'
+
+macbook91-facetimehd: warning: the compiler for an installed kernel is missing
+  An installed kernel is built with GCC (CONFIG_CC_IS_GCC=y). The build needs:
+    sudo pacman -S gcc
+MSG
+    fi
+}
+
+# Apple's camera firmware is not part of this package and is never downloaded
+# on the user's behalf: the user runs the fetch script, on their own
+# responsibility, after reading this. An upgrade ($1 = upgrade) stays silent
+# when the firmware is there and gives the short form of the warning when it
+# is not; an installation says either one in full.
+_firmware_note() {
+    if [ -r /usr/lib/firmware/facetimehd/firmware.bin ]; then
+        [ "${1:-}" != upgrade ] || return 0
+        cat <<'MSG'
+
+macbook91-facetimehd: note: camera firmware found in /usr/lib/firmware/facetimehd/
+  macbook91-facetimehd-verify checks it against the pinned SHA256.
+MSG
+        return
+    fi
+    if [ "${1:-}" = upgrade ]; then
+        # The full notice was shown at the installation; this is the short form.
+        cat <<'MSG'
+
+macbook91-facetimehd: warning: the camera does not work yet, Apple's firmware is missing
+  This package does not contain it and does not download it. Whether Apple's
+  license terms allow you to use it this way has not been verified. To get it,
+  on your own account and at your own responsibility, run:
+    sudo macbook91-facetimehd-fetch-firmware
+MSG
+        return
+    fi
+    cat <<'MSG'
+
+macbook91-facetimehd: warning: the camera does not work yet, Apple's firmware is missing
+  The camera needs Apple's firmware, which this package does not contain
+  and does not download. Apple's firmware is proprietary software under
+  Apple's license terms. This project does not distribute it and has not
+  verified whether those terms allow you to use it this way.
+
+  If you decide to get it, on your own account and at your own
+  responsibility, run:
+    sudo macbook91-facetimehd-fetch-firmware
+
+  The command asks for confirmation, then downloads about 18 MB of Apple's
+  macOS 10.12.6 update from updates.cdn-apple.com, checks every part
+  against a pinned SHA256 and writes only the extracted firmware to
+  /usr/lib/firmware/facetimehd/. pacman does not track those files. To
+  remove them:
+    sudo rm -r /usr/lib/firmware/facetimehd
+MSG
+}
+
+post_install() {
+    cat <<'MSG'
+
+macbook91-facetimehd: note: installed
+  The DKMS hook builds the module for every installed kernel with headers
+  when this transaction finishes. This must show "installed" for each:
+    dkms status macbook91-facetimehd
+
+  Then load the module or reboot:
+    sudo modprobe macbook91-facetimehd
+
+  Then check the result. It ends with one PASS or FAIL line:
+    macbook91-facetimehd-verify
+
+macbook91-facetimehd: note: differences from upstream facetimehd
+  The module is called macbook91-facetimehd (macbook91_facetimehd in
+  lsmod). It survives suspend with the camera open, restarts a hung image
+  processor by power cycling it, and powers the camera off after
+  idle_poweroff_ms (default 5000 ms) without a stream, which saves about
+  0.4 W of CPU package power. The first frame after power-off takes about
+  1.1 s instead of 0.4 s. To keep the camera powered:
+    echo 'options macbook91_facetimehd idle_poweroff_ms=-1' | sudo tee /etc/modprobe.d/macbook91-facetimehd.conf
+
+  To roll back completely (the second command only if you fetched the
+  firmware):
+    sudo pacman -R macbook91-facetimehd-dkms
+    sudo rm -r /usr/lib/firmware/facetimehd
+MSG
+    _toolchain_note
+    _firmware_note
+}
+
+# An upgrade reports what changed (the version) and what the user has to do
+# about it, plus the two conditions that make the camera or the build fail:
+# a missing compiler or header package, and missing firmware (house HIG FEH-5,
+# TXT-1). The explanations of post_install are not repeated.
+# pacman passes the new version as $1 and the old one as $2.
+post_upgrade() {
+    printf '\nmacbook91-facetimehd: note: upgraded from %s to %s\n' "${2:-unknown}" "$1"
+    cat <<'MSG'
+  The DKMS hook builds the new module for every installed kernel with headers
+  when this transaction finishes. The module that is loaded now keeps running
+  until the next boot or module reload. Then check the result:
+    macbook91-facetimehd-verify
+MSG
+    _toolchain_note
+    _firmware_note upgrade
+}

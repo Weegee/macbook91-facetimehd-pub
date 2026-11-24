@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Provenance of every byte this project builds on. Format: key value.
+# Driver base: patjak/facetimehd master, fetched 2026-10-13.
+driver.repo        https://github.com/patjak/facetimehd
+driver.commit      c9b063a3c04e392e3434516388133d23669a773a
+driver.tree        d8c035f8e1fcf1915b006906e01c1e8a4188ee8f
+# PR #355 (pschatzmann, open), head e678cdc, exported as patches/0001-0004.
+# Tree recorded when 0001-0004 were exported. fetch-upstream.sh does not check it,
+# and on 2026-10-13 neither `git apply` on the tree above nor the build/dev
+# recipe reproduced it (NOT VERIFIED):
+driver.pr355.head  e678cdc9e17c10640e6e253653f97a934328b7a4
+driver.patched.tree 6e56e55c15bf2a61ee8b87e8ad0853532fcf36ed
+patch.0001.sha256  21df0e3d42fefcc21287cc6fb6cd6342594191b9bc1a2545aeb9c2d1afcaa8c9
+patch.0002.sha256  f1d14a5e00d6b288abd6537fcbfbb44fd8ac783e503d31a26ac160f646684355
+patch.0003.sha256  1acd3314c86b658f4b52f6312fd922f5b0f97eb2278039dae64db97b666395b3
+patch.0004.sha256  fc5e3beac58f18819df30a574684a77b2d6866bfd7581e53e09fffbce8f5789c
+# Own patches 0005-0017 (MacBook9,1 recovery, suspend, idle power-off, module name, version, remove and set-file fixes, non-deprecated workqueues, format lock, debug command and watchdog, discrete frame sizes), exported from build/dev;
+# result tree of that repository: upstream c9b063a without dkms.conf, README.md and firmware/,
+# patches 0001-0017 applied with git am (not checked by fetch-upstream.sh):
+driver.ours.tree   fb93e2034a29209d2b84bae0f9d461b7f11cba3b
+patch.0005.sha256  04fbeb15bf2eff17bd80c69e8fe8261c7c132bbfbb0a41eebfee5ee6da2d4af3
+patch.0006.sha256  cb3cf85bc622dca605cde884d8d000a407a57ade7f8d4e6532ceea71f0b7eae1
+patch.0007.sha256  085625da18e50f89d1bff3e63ea1b076b6d70d385061c52821c6108c91d36f5b
+patch.0008.sha256  8c813ce93269914a258eaa9f1f998dbcf1ecebafbf84dbb8b286445cb9fef334
+patch.0009.sha256  6d9402b140b61f75f1841b12e5e0111d6bdf6e20f04731c4a6fc3ed297bf0c7d
+patch.0010.sha256  c348c9d0e93dbefcfc76da98ace22d48cfaba39ad5edb6e974e09abf683cf823
+patch.0011.sha256  7f9e053abdb58ff29aa6f037d0991cf2d2c9a2981fa8c986a831d5be4f379ef0
+patch.0012.sha256  586c340a4bbfc88259fb5fd6bc134566ae277e4ab646cb71281b99b2041674a9
+patch.0013.sha256  46493766b0a026e7a21b730afb249b35cca7e2d67177b1bfd31ae0e8df74c1d0
+patch.0014.sha256  d82c3e05fa752fbed6385bba18ef74d7d23a17ab2933761d3540a7e18789bd5d
+patch.0015.sha256  97b77a8bfc9de0de0f82ab118c019456928d6d5f1614ad583eb6d7dcb1d8de6a
+patch.0016.sha256  8ecac932bf777a8f30d4318c44b0f45d00c3c0e976c33e15b1c469a8c9ffa608
+patch.0017.sha256  8be706550a0c221ae0b5a391237ef3129af6c2ac70492d12a538b55391a89606
+# Provenance only, nothing reads these keys: tools/macbook91-facetimehd-fetch-firmware
+# is adapted from this upstream firmware repository (GPL-2.0-only).
+firmware.repo      https://github.com/patjak/facetimehd-firmware
+firmware.commit    60ee21228d9ca00a7bd84fdaefaff00a81f1db91
+firmware.tree      ce094e9982aba3019829b4c662331cb15f89be90
