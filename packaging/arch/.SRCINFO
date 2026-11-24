@@ -1,6 +1,6 @@
 pkgbase = macbook91-facetimehd
 	pkgdesc = FaceTime HD camera driver for Apple MacBook9,1 (A1534) with suspend and hang recovery
-	pkgver = 20261109.01
+	pkgver = 20261124.01
 	pkgrel = 1
 	url = https://github.com/Weegee/macbook91-facetimehd-pub
 	arch = x86_64
@@ -8,7 +8,7 @@ pkgbase = macbook91-facetimehd
 	license = GPL-2.0-or-later
 	license = GPL-3.0-or-later
 	makedepends = make
-	source = macbook91-facetimehd-20261109.01.tar
+	source = macbook91-facetimehd-20261124.01.tar
 	sha256sums = 276f249af4747af1d46b3952ff38297da268b2b4dc7611d9bfce892c7edc0825
 
 pkgname = macbook91-facetimehd-dkms

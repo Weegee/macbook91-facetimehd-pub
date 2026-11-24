@@ -4,12 +4,17 @@ Versions have the form YYYYMMDD.NN (release date, NN counts releases that day). 
 is v<version>. Entries say what changes for users. Commit hashes before 20261021.01 belong to the
 maintainer's private history. Runtime tests per release: `docs/test-status.json`.
 
-## Unreleased
+## 20261124.01 (2026-11-24)
+
+No driver change (same upstream commit c9b063a and patches 0001-0017 as 20261109.01). Not run on
+hardware.
 
 - `macbook91-facetimehd-verify`: on a terminal the report uses symbols and colour, marks problems
   in the first column and repeats them under "To check:" before the result. `fetch-firmware` and
-  `kernel-series` colour their error and note lines. A pipe, a file and `NO_COLOR` get the plain
-  text as before; exit codes and line formats are unchanged.
+  `kernel-series` colour their error and note lines. A pipe, a file, `NO_COLOR` and `TERM=dumb` get
+  the plain text as before; exit codes and line formats are unchanged.
+- README is shorter (about 90 lines). Installation, status and licences have their own pages under
+  `docs/`: `INSTALL.md`, `STATUS.md`, `LICENSING.md`. Developer pages moved to `docs/entwicklung/`.
 
 ## 20261109.01 (2026-11-09)
 
