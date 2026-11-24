@@ -1,6 +1,6 @@
 # HARDWARE: diagnosis of the test machine (MacBook9,1)
 
-As of 2026-10-13, boot 0 since 2026-10-12 22:47. All commands read-only. Root commands via `tools/dev-root-diag.sh` (dmidecode, lspci -vvv/-xxxx, copy of `/sys/firmware/acpi/tables`). Raw data: kept outside the repository (not published). Sanitized excerpts: `docs/diag/`.
+As of 2026-10-13, boot 0 since 2026-10-12 22:47. All commands read-only. Root commands via `tools/dev-root-diag.sh` (dmidecode, lspci -vvv/-xxxx, copy of `/sys/firmware/acpi/tables`). Raw data: kept outside the repository (not published). Sanitized excerpts: `docs/entwicklung/diag/`.
 
 ## Model and firmware
 
