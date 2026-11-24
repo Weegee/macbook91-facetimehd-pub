@@ -1,6 +1,6 @@
 # POWER-RECOVERY: power, suspend and hang recovery (patches 0007-0009)
 
-As of 2026-10-13, kernel 7.2.9-2-cachyos. Measured values: `docs/measurements/2026-10-13-phase2/`.
+As of 2026-10-13, kernel 7.2.9-2-cachyos. Measured values: `docs/entwicklung/measurements/2026-10-13-phase2/`.
 
 ## Hardware basics (the test machine, MacBook9,1)
 

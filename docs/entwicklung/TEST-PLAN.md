@@ -1,8 +1,8 @@
 # TEST-PLAN: measurable quality and stability criteria
 
-As of 2026-10-13 (plan). At that time **no test of this list had been run**, except the compile tests in HARDWARE.md. Current results: `docs/test-status.json` (schema 1 with `id`, `status`, `note`, not the line format planned below) and `docs/measurements/`.
+As of 2026-10-13 (plan). At that time **no test of this list had been run**, except the compile tests in HARDWARE.md. Current results: `docs/test-status.json` (schema 1 with `id`, `status`, `note`, not the line format planned below) and `docs/entwicklung/measurements/`.
 
-Every test writes raw data to `docs/measurements/<date>-<test>/` (sanitized) and a line to `docs/test-status.json`: `{id, kernel, module_srcversion, firmware_sha256, setfile_sha256, result: PASS|FAIL|NOT_RUN, evidence}`. Global FAIL criterion in every test: new kernel lines with `WARNING:`, `BUG:`, `Oops`, `call trace`, `general protection`, `taint` (except `O`/`E` for out-of-tree/unsigned) since the start of the test.
+Every test writes raw data to `docs/entwicklung/measurements/<date>-<test>/` (sanitized) and a line to `docs/test-status.json`: `{id, kernel, module_srcversion, firmware_sha256, setfile_sha256, result: PASS|FAIL|NOT_RUN, evidence}`. Global FAIL criterion in every test: new kernel lines with `WARNING:`, `BUG:`, `Oops`, `call trace`, `general protection`, `taint` (except `O`/`E` for out-of-tree/unsigned) since the start of the test.
 
 ## Mandatory tests (gate G1)
 

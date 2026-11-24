@@ -66,8 +66,8 @@ on your own responsibility. The four development helpers are now `tools/dev-*.sh
   command when they are missing.
 - Licenses: own files GPL-3.0-or-later, the module's build files GPL-2.0-or-later, driver and
   patches GPL-2.0-only (`docs/LICENSING.md`). The decompiled ACPI excerpts are no longer in the
-  repository; `docs/HARDWARE.md` describes those methods in the project's own words.
-- `docs/HARDWARE.md` corrected: the wait for the link after `CMPE(1)` is up to 1 s, not 10 s.
+  repository; `docs/entwicklung/HARDWARE.md` describes those methods in the project's own words.
+- `docs/entwicklung/HARDWARE.md` corrected: the wait for the link after `CMPE(1)` is up to 1 s, not 10 s.
 - Not run on hardware; carried over from 20261020.02 because the driver sources are identical.
 
 ## 20261020.02 (2026-10-20)
@@ -130,4 +130,4 @@ patjak/facetimehd c9b063a with
   hash
 
 DKMS tree checked against `SOURCES.sha256` before every build. Measurements:
-`docs/measurements/2026-10-13-T0` and `2026-10-13-phase2`.
+`docs/entwicklung/measurements/2026-10-13-T0` and `2026-10-13-phase2`.

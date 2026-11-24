@@ -11,7 +11,7 @@ carry none and follow this table.
 | `tools/macbook91-facetimehd-fetch-firmware` | GPL-2.0-only: adapted from patjak/facetimehd-firmware (commit 60ee212, GPL-2.0) |
 | `patches/`: 0001-0004 by pschatzmann (upstream PR #355), 0005-0017 by this project | GPL-2.0-only, the license of the driver files they change |
 | `src/macbook91-facetimehd/` (assembled, not tracked): upstream's `fthd_*` files with the patches applied | GPL-2.0-only; its `Kbuild`, `Makefile`, `dkms.conf` and `TESTED-SERIES` are those from `packaging/overlay/` |
-| `docs/diag/`: captured system output and kernel configuration | not licensed by this project |
+| `docs/entwicklung/diag/`: captured system output and kernel configuration | not licensed by this project |
 
 The module is GPL-2.0-only and declares `MODULE_LICENSE("GPL")`; GPL-3.0 code cannot be compiled
 into it, and whoever passes on a built module has to provide its build files under GPLv2 as well.
@@ -24,5 +24,5 @@ as the only license and keep it.
 The driver is patjak/facetimehd at the commit `packaging/upstream.lock` pins. The firmware is
 Apple's; this repository and its packages do not contain it. No Apple binaries or Apple code are
 included. The power and recovery timing follows the behaviour of Apple's macOS driver;
-`docs/POWER-RECOVERY.md` records it as facts about registers and timing, and `docs/HARDWARE.md`
+`docs/entwicklung/POWER-RECOVERY.md` records it as facts about registers and timing, and `docs/entwicklung/HARDWARE.md`
 describes in this project's own words what the test machine's ACPI tables do.

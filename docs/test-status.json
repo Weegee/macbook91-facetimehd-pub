@@ -12,7 +12,7 @@
   },
   "gates": [
     {"id": "hermetic.run_tests", "status": "PASS", "note": "tests/run-tests.sh, see release STATUS.txt for counts"},
-    {"id": "hw.stream", "status": "PASS", "note": "848x588 YUYV 30.02 fps; docs/measurements/2026-10-13-phase2"},
+    {"id": "hw.stream", "status": "PASS", "note": "848x588 YUYV 30.02 fps; docs/entwicklung/measurements/2026-10-13-phase2"},
     {"id": "hw.soak_60min", "status": "PASS", "note": "108000 frames, no gap, no slab growth (0009)"},
     {"id": "hw.power_cycle", "status": "PASS", "note": "32 cycles (0007) + 30 cold starts (0010) without leak"},
     {"id": "hw.suspend_s3_s2idle", "status": "PASS", "note": "22 suspends with 0008/0009, 9 with 0010/0011, open and closed"},

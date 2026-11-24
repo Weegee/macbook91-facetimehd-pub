@@ -70,12 +70,15 @@ release/<pkgver>/   the current release: PKGBUILD, .SRCINFO, source tarball,
                     the user downloads it with
                     tools/macbook91-facetimehd-fetch-firmware.
 docs/               user pages (INSTALL.md, STATUS.md, LICENSING.md,
-                    CHANGELOG.md) and developer pages: research, hardware
-                    facts, test plan, design (POWER-RECOVERY.md),
-                    measurements, test status. Every claim is tagged
+                    CHANGELOG.md) and test-status.json. Every claim is tagged
                     VERIFIED / NOT VERIFIED / REFUTED. A new feature
                     changes the user page it concerns in the same commit.
-docs/diag/          sanitized diagnostic excerpts: system output and short
+docs/entwicklung/   developer pages: RESEARCH.md, HARDWARE.md (facts about
+                    the test machine), TEST-PLAN.md, POWER-RECOVERY.md
+                    (design), FIRMWARE.md, NAMCAP.md, measurements/ (raw
+                    data per test).
+docs/entwicklung/diag/
+                    sanitized diagnostic excerpts: system output and short
                     excerpts of Apple's ACPI tables, quoted for
                     interoperability research (no serials, no LUKS UUIDs,
                     no MAC addresses).

@@ -5,7 +5,7 @@
 # the facetimehd driver with this project's patches as a DKMS module. The
 # Apple firmware it needs is not part of the package: the user downloads it
 # from Apple with macbook91-facetimehd-fetch-firmware, on their own
-# responsibility (see the install message, README.md and docs/FIRMWARE.md).
+# responsibility (see the install message, README.md and docs/entwicklung/FIRMWARE.md).
 
 pkgbase=macbook91-facetimehd
 pkgname=(macbook91-facetimehd-dkms)

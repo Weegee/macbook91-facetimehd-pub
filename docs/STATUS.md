@@ -1,7 +1,7 @@
 # What has run on hardware
 
 Measured on one MacBook9,1 (CachyOS). The record per test is `docs/test-status.json`; raw data is
-in `docs/measurements/`. Anything not listed under "Run" has not been run.
+in `docs/entwicklung/measurements/`. Anything not listed under "Run" has not been run.
 
 ## Run
 
