@@ -17,8 +17,8 @@ makepkg -si
 ```
 
 The first command must print three `OK` lines (`PKGBUILD`, the `.install` file, the tar); if one is
-missing or reads `FAILED`, do not run `makepkg`. Requirements: `base-devel`, `dkms` and the
-headers of every kernel you use. Details, other ways to build, removal: [docs/INSTALL.md](docs/INSTALL.md).
+missing or reads `FAILED`, do not run `makepkg`. Requirements: `base-devel`, `dkms`, the
+headers of every kernel you use and, for clang-built kernels (CachyOS), `clang`, `lld`, `llvm`. Details, other ways to build, removal: [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Get the firmware and check
 

@@ -5,6 +5,9 @@ in `docs/entwicklung/measurements/`. Anything not listed under "Run" has not bee
 
 ## Run
 
+Unless a line names another kernel, the default kernel of the record is 7.2.9-2-cachyos
+(`kernel` in `docs/test-status.json`).
+
 - 100 open/close cycles, 60 minutes of streaming (108 000 frames, no gap), more than 30 real
   suspends in S3 and s2idle with and without a stream, injected hangs while streaming and idle,
   more than 60 power cycles without a memory leak, v4l2-compliance 57/57.

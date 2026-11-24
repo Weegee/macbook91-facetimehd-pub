@@ -1,0 +1,15 @@
+macbook91-facetimehd verify (7.2.9-2-cachyos)
+  ✔ machine is MacBook9,1
+  ✔ macbook91-facetimehd-dkms 20261109.01 installed
+  ✔ firmware 5.60.0 and set file 1675 match their pinned SHA256
+  ✔ DKMS: installed
+  ✔ 0000:03:00.0 is bound to macbook91_facetimehd
+▸ ✘ loaded module reports '20261102.01', installed source is 20261109.01 (reboot or reload)
+▸ ▲ /dev/video0 is in use by another program; capture not checked
+  ✔ kernel log: no macbook91_facetimehd errors this boot
+
+To check:
+▸ ✘ loaded module reports '20261102.01', installed source is 20261109.01 (reboot or reload)
+▸ ▲ /dev/video0 is in use by another program; capture not checked
+
+FAIL (1 failed, 1 warning)
